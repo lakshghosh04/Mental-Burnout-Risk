@@ -1,0 +1,27 @@
+import pandas as pd
+import numpy as np
+
+sm = pd.read_csv("data/social_media_mental_health.csv")
+sl = pd.read_csv("data/sleep_health_lifestyle.csv")
+
+sm2 = pd.DataFrame({
+    "age": pd.to_numeric(sm.get("Age"), errors="coerce"),
+    "gender": sm.get("Gender"),
+    "hours_social": pd.to_numeric(sm.get("Hours_per_day"), errors="coerce"),
+    "sleep_hours": pd.to_numeric(sm.get("Sleep_hours"), errors="coerce"),
+    "work_hours": pd.to_numeric(sm.get("Work_hours"), errors="coerce"),
+    "target": sm.get("Mental_health_issue").astype(str).str.lower().map({"yes":1,"no":0})
+})
+
+sl2 = pd.DataFrame({
+    "age": pd.to_numeric(sl.get("Age"), errors="coerce"),
+    "gender": sl.get("Gender"),
+    "hours_social": pd.to_numeric(sl.get("Screen Time"), errors="coerce"),
+    "sleep_hours": pd.to_numeric(sl.get("Sleep Duration"), errors="coerce"),
+    "work_hours": pd.to_numeric(sl.get("Work Hours"), errors="coerce"),
+    "target": pd.to_numeric(sl.get("Stress Level"), errors="coerce").apply(lambda x: 1 if x>=7 else 0)
+})
+
+df = pd.concat([sm2, sl2], ignore_index=True).dropna(subset=["target"])
+df.to_csv("data/burnout_unified.csv", index=False)
+print("Saved unified dataset:", df.shape)
