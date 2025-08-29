@@ -10,7 +10,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import accuracy_score, roc_auc_score, f1_score, classification_report
+from sklearn.metrics import accuracy_score, roc_auc_score, f1_score
 import joblib
 
 st.set_page_config(layout="wide", page_title="Burnout Risk")
@@ -79,7 +79,7 @@ def build_pipeline(class_weight, calibrate):
     ])
     base = LogisticRegression(max_iter=500, class_weight=class_weight)
     if calibrate:
-        clf = CalibratedClassifierCV(base, method="sigmoid", cv=5)
+        clf = CalibratedClassifierCV(estimator=base, method="sigmoid", cv=5)
     else:
         clf = base
     pipe = Pipeline([
@@ -240,11 +240,8 @@ with explain_tab:
         st.info("Train or select a model first.")
     else:
         pipe = model["pipeline"]
-        base = None
-        if isinstance(pipe.named_steps["clf"], CalibratedClassifierCV):
-            base = pipe.named_steps["clf"].base_estimator
-        else:
-            base = pipe.named_steps["clf"]
+        clf_step = pipe.named_steps["clf"]
+        base = getattr(clf_step, "base_estimator", None) or getattr(clf_step, "estimator", None) or clf_step
         if hasattr(base, "coef_"):
             num_cols = ["age","hours_social","sleep_hours","work_hours"]
             cat_cols = ["gender"]
