@@ -119,6 +119,17 @@ else:
     else:
         st.success("Model is trained and ready.")
 
+if st.button("Show Feature Weights") and st.session_state.model:
+    prep = st.session_state.model.named_steps["prep"]
+    clf = st.session_state.model.named_steps["clf"]
+    names = []
+    names += num_cols
+    if "gender" in cat_cols:
+        ohe = prep.named_transformers_["cat"]
+        names += list(ohe.get_feature_names_out(cat_cols))
+    coefs = pd.Series(clf.coef_[0], index=names).sort_values(key=abs, ascending=False)
+    st.dataframe(coefs.to_frame("weight"))
+
 st.markdown("---")
 st.subheader("Try a Prediction")
 
