@@ -10,8 +10,6 @@ from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report
 
-import plotly.express as px
-
 st.set_page_config(page_title="Burnout Risk Predictor", layout="wide")
 st.title("🧠 Burnout Risk Predictor")
 
@@ -72,36 +70,6 @@ if len(classes) < 2:
     st.error(f"Target has only one class present: {classes}. Need both 0 and 1.")
     st.stop()
 
-# ---------------- BI INSIGHTS ----------------
-st.markdown("---")
-st.subheader("📊 BI Insights")
-
-colA, colB, colC = st.columns(3)
-with colA:
-    st.caption("Burnout risk distribution")
-    st.bar_chart(df["target"].value_counts().sort_index())
-with colB:
-    st.caption("Avg sleep hours by risk (0=no risk, 1=at risk)")
-    st.bar_chart(df.groupby("target")["sleep_hours"].mean())
-with colC:
-    st.caption("Avg social media hours by risk")
-    st.bar_chart(df.groupby("target")["hours_social"].mean())
-
-st.caption("Sleep vs Social media, colored by risk")
-fig = px.scatter(
-    df, x="hours_social", y="sleep_hours",
-    color=df["target"].astype(str),
-    labels={"color":"risk"},
-    opacity=0.6
-)
-st.plotly_chart(fig, use_container_width=True)
-
-if "gender" in df.columns:
-    st.caption("Mean risk by gender (proportion at risk)")
-    risk_by_gender = df.groupby("gender")["target"].mean().sort_values(ascending=False)
-    st.bar_chart(risk_by_gender)
-
-# ---------------- MODEL ----------------
 pre = ColumnTransformer(
     transformers=[
         ("num", StandardScaler(), num_cols),
