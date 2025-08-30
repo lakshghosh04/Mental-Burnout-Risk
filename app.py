@@ -4,14 +4,19 @@ import numpy as np
 import hashlib
 import io
 from datetime import datetime
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split, cross_validate, StratifiedKFold
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import accuracy_score, roc_auc_score, f1_score
+from sklearn.metrics import (
+    accuracy_score, roc_auc_score, f1_score, precision_recall_curve,
+    roc_curve, average_precision_score, confusion_matrix
+)
 import joblib
 
 st.set_page_config(layout="wide", page_title="Burnout Risk")
@@ -63,12 +68,12 @@ def prepare(df):
     df["gender"] = df["gender"].astype(str)
     for c in num_cols:
         df[c] = df[c].clip(lower=0)
-        df["target"] = pd.to_numeric(df["target"], errors="coerce").fillna(0).astype(int)
+    df["target"] = pd.to_numeric(df["target"], errors="coerce").fillna(0).astype(int)
     X = df.drop("target", axis=1)
     y = df["target"].values
     return X, y
 
-def build_pipeline(class_weight, calibrate):
+def build_pipeline(model_type, class_weight, calibrate):
     num_cols = ["age","hours_social","sleep_hours","work_hours"]
     cat_cols = ["gender"]
     pre = ColumnTransformer([
@@ -81,7 +86,10 @@ def build_pipeline(class_weight, calibrate):
             ("ohe", OneHotEncoder(handle_unknown="ignore")),
         ]), cat_cols),
     ])
-    base = LogisticRegression(max_iter=500, class_weight=class_weight)
+    if model_type == "Random Forest":
+        base = RandomForestClassifier(n_estimators=300, random_state=42, class_weight=("balanced" if class_weight else None))
+    else:
+        base = LogisticRegression(max_iter=500, class_weight=("balanced" if class_weight else None))
     if calibrate:
         clf = CalibratedClassifierCV(estimator=base, method="sigmoid", cv=5)
     else:
@@ -176,7 +184,7 @@ with predict_tab:
             if model:
                 with st.container():
                     st.markdown("**Model card**")
-                    st.write({
+                    meta = {
                         "trained": model["trained_at"],
                         "Data version": model["data_version"],
                         "rows": model["rows"],
@@ -188,7 +196,8 @@ with predict_tab:
                         "calibrated": model["options"]["calibrate"],
                         "class_weight": model["options"]["class_weight"],
                         "fairness_note": "Gender optional; review bias before deployment."
-                    })
+                    }
+                    st.json(meta)
 
 with train_tab:
     src = st.radio("Training data", ["Default","Upload"], horizontal=True)
@@ -201,7 +210,9 @@ with train_tab:
     else:
         X, y = prepare(df)
         st.caption(f"Rows: {len(df)} | Features: {X.shape[1]}")
-        c1, c2, c3 = st.columns(3)
+        c0, c1, c2, c3 = st.columns(4)
+        with c0:
+            model_type = st.selectbox("Model", ["Logistic Regression","Random Forest"])
         with c1:
             test_size = st.slider("Test split", 0.1, 0.4, 0.2, 0.05)
         with c2:
@@ -211,8 +222,8 @@ with train_tab:
         calibrate_flag = st.checkbox("Calibrate probabilities", value=False)
         go = st.button("Train model")
         if go:
-            cw = "balanced" if class_weight_flag else None
-            pipe = build_pipeline(cw, calibrate_flag)
+            cw = True if class_weight_flag else False
+            pipe = build_pipeline(model_type, cw, calibrate_flag)
             scores = cv_scores(pipe, X, y)
             Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=test_size, random_state=int(random_state), stratify=y)
             pipe.fit(Xtr, ytr)
@@ -222,6 +233,41 @@ with train_tab:
             roc = roc_auc_score(yte, proba)
             f1 = f1_score(yte, preds)
             st.success(f"Held-out: acc {acc:.3f} | roc_auc {roc:.3f} | f1 {f1:.3f}")
+            fig1, ax1 = plt.subplots()
+            fpr, tpr, _ = roc_curve(yte, proba)
+            ax1.plot(fpr, tpr)
+            ax1.plot([0,1],[0,1], linestyle='--')
+            ax1.set_xlabel('FPR')
+            ax1.set_ylabel('TPR')
+            ax1.set_title('ROC curve')
+            st.pyplot(fig1)
+            fig2, ax2 = plt.subplots()
+            p, r, _ = precision_recall_curve(yte, proba)
+            ap = average_precision_score(yte, proba)
+            ax2.plot(r, p)
+            ax2.set_xlabel('Recall')
+            ax2.set_ylabel('Precision')
+            ax2.set_title(f'PR curve (AP={ap:.3f})')
+            st.pyplot(fig2)
+            fig3, ax3 = plt.subplots()
+            cm = confusion_matrix(yte, preds)
+            im = ax3.imshow(cm)
+            ax3.set_title('Confusion matrix')
+            ax3.set_xticks([0,1])
+            ax3.set_yticks([0,1])
+            ax3.set_xlabel('Predicted')
+            ax3.set_ylabel('True')
+            for (i,j), v in np.ndenumerate(cm):
+                ax3.text(j, i, str(v), ha='center', va='center')
+            st.pyplot(fig3)
+            fig4, ax4 = plt.subplots()
+            frac_pos, mean_pred = calibration_curve(yte, proba, n_bins=10)
+            ax4.plot(mean_pred, frac_pos, marker='o')
+            ax4.plot([0,1],[0,1], linestyle='--')
+            ax4.set_xlabel('Mean predicted prob')
+            ax4.set_ylabel('Fraction positive')
+            ax4.set_title('Calibration curve')
+            st.pyplot(fig4)
             mid = f"M{len(st.session_state.models)+1}"
             model_record = {
                 "id": mid,
@@ -232,7 +278,7 @@ with train_tab:
                 "rows": len(df),
                 "features": list(X.columns),
                 "cv": scores,
-                "options": {"calibrate": calibrate_flag, "class_weight": cw},
+                "options": {"model_type": model_type, "calibrate": calibrate_flag, "class_weight": ("balanced" if cw else None)},
             }
             st.session_state.models.append(model_record)
             set_active_model(mid)
@@ -246,18 +292,22 @@ with explain_tab:
         pipe = model["pipeline"]
         clf_step = pipe.named_steps["clf"]
         base = getattr(clf_step, "base_estimator", None) or getattr(clf_step, "estimator", None) or clf_step
+        num_cols = ["age","hours_social","sleep_hours","work_hours"]
+        cat_cols = ["gender"]
+        cat_pipe = pipe.named_steps["prep"].named_transformers_["cat"]
+        ohe = cat_pipe.named_steps["ohe"]
+        cat_names = list(ohe.get_feature_names_out(cat_cols))
+        feature_names = num_cols + cat_names
         if hasattr(base, "coef_"):
-            num_cols = ["age","hours_social","sleep_hours","work_hours"]
-            cat_cols = ["gender"]
-            cat_pipe = pipe.named_steps["prep"].named_transformers_["cat"]
-            ohe = cat_pipe.named_steps["ohe"]
-            cat_names = list(ohe.get_feature_names_out(cat_cols))
-            feature_names = num_cols + cat_names
             coefs = base.coef_.ravel()
             w = pd.DataFrame({"feature": feature_names, "weight": coefs}).sort_values("weight", ascending=False)
             st.dataframe(w, use_container_width=True)
+        elif hasattr(base, "feature_importances_"):
+            imps = base.feature_importances_
+            w = pd.DataFrame({"feature": feature_names, "importance": imps}).sort_values("importance", ascending=False)
+            st.dataframe(w, use_container_width=True)
         else:
-            st.info("Weights not available for this model.")
+            st.info("No explainability attributes available for this model.")
 
 with models_tab:
     if len(st.session_state.models) == 0:
@@ -294,7 +344,7 @@ with models_tab:
                 except Exception as e:
                     st.error("Could not load model.")
         with st.expander("Active model card"):
-            st.write({
+            meta = {
                 "trained": picked["trained_at"],
                 "Data version": picked["data_version"],
                 "rows": picked["rows"],
@@ -303,10 +353,10 @@ with models_tab:
                 "cv_roc_auc": round(picked["cv"]["test_roc_auc"],3),
                 "cv_f1": round(picked["cv"]["test_f1"],3),
                 "threshold": round(st.session_state.threshold,2),
-                "calibrated": picked["options"]["calibrate"],
-                "class_weight": picked["options"]["class_weight"],
+                "options": picked["options"],
                 "fairness_note": "Gender optional; review bias before deployment."
-            })
+            }
+            st.json(meta)
 
 with about_tab:
     st.markdown("### About")
