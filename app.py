@@ -221,7 +221,7 @@ with train_tab:
             mid = f"M{len(st.session_state.models)+1}"
             model_record = {
                 "id": mid,
-                "name": f"model {len(st.session_state.models)+1}",
+                "name": f"model {len(st.session_state.Models)+1}",
                 "pipeline": pipe,
                 "trained_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "data_version": dv,
