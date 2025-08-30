@@ -182,7 +182,7 @@ with predict_tab:
             conf = prob if label==1 else 1-prob
             st.session_state.threshold = thr
             st.session_state.last_prediction = {"risk": prob, "conf": conf}
-            st.subheader(f"Risk: {prob*100:.1f}% | Label: {'At-risk' if label==1 else 'Not at-risk'}")
+            st.empty()
             if model:
                 with st.container():
                     st.markdown("**Model card**")
@@ -202,7 +202,7 @@ with predict_tab:
                     st.json(meta)
 
 with train_tab:
-    src = st.radio("Training data", ["Default","Upload"], horizontal=True)
+    src = st.radio("Training data", ["Default","Upload"], horizontal=True, key="train_src")
     file = None
     if src == "Upload":
         file = st.file_uploader("CSV for training", type=["csv"], key="train_csv")
@@ -214,15 +214,15 @@ with train_tab:
         st.caption(f"Rows: {len(df)} | Features: {X.shape[1]}")
         c0, c1, c2, c3 = st.columns(4)
         with c0:
-            model_type = st.selectbox("Model", ["Logistic Regression","Random Forest"])
+            model_type = st.selectbox("Model", ["Logistic Regression","Random Forest"], key="model_type")
         with c1:
-            test_size = st.slider("Test split", 0.1, 0.4, 0.2, 0.05)
+            test_size = st.slider("Test split", 0.1, 0.4, 0.2, 0.05, key="test_split")
         with c2:
-            random_state = st.number_input("Random state", 0, 9999, 42)
+            random_state = st.number_input("Random state", 0, 9999, 42, key="rand_state")
         with c3:
-            class_weight_flag = st.checkbox("Use class_weight='balanced'", value=False)
-        calibrate_flag = st.checkbox("Calibrate probabilities", value=False)
-        go = st.button("Train model")
+            class_weight_flag = st.checkbox("Use class_weight='balanced'", value=False, key="cw_flag")
+        calibrate_flag = st.checkbox("Calibrate probabilities", value=False, key="cal_flag")
+        go = st.button("Train model", key="train_btn")
         if go:
             cw = True if class_weight_flag else False
             pipe = build_pipeline(model_type, cw, calibrate_flag)
@@ -258,39 +258,51 @@ with train_tab:
                 "fpr": fpr, "tpr": tpr, "precision": p, "recall": r, "ap": float(ap),
                 "cm": cm, "mean_pred": mean_pred, "frac_pos": frac_pos
             }
-        res = st.session_state.last_train
-        if res is not None:
+
+    res = st.session_state.last_train
+    if res is not None:
             st.success(f"Held-out: acc {res['acc']:.3f} | roc_auc {res['roc']:.3f} | f1 {res['f1']:.3f}")
-            fig1, ax1 = plt.subplots()
-            ax1.plot(res['fpr'], res['tpr'])
-            ax1.plot([0,1],[0,1], linestyle='--')
-            ax1.set_xlabel('FPR')
-            ax1.set_ylabel('TPR')
-            ax1.set_title('ROC curve')
-            st.pyplot(fig1)
-            fig2, ax2 = plt.subplots()
-            ax2.plot(res['recall'], res['precision'])
-            ax2.set_xlabel('Recall')
-            ax2.set_ylabel('Precision')
-            ax2.set_title(f"PR curve (AP={res['ap']:.3f})")
-            st.pyplot(fig2)
-            fig3, ax3 = plt.subplots()
-            im = ax3.imshow(res['cm'])
-            ax3.set_title('Confusion matrix')
-            ax3.set_xticks([0,1])
-            ax3.set_yticks([0,1])
-            ax3.set_xlabel('Predicted')
-            ax3.set_ylabel('True')
-            for (i,j), v in np.ndenumerate(res['cm']):
-                ax3.text(j, i, str(v), ha='center', va='center')
-            st.pyplot(fig3)
-            fig4, ax4 = plt.subplots()
-            ax4.plot(res['mean_pred'], res['frac_pos'], marker='o')
-            ax4.plot([0,1],[0,1], linestyle='--')
-            ax4.set_xlabel('Mean predicted prob')
-            ax4.set_ylabel('Fraction positive')
-            ax4.set_title('Calibration curve')
-            st.pyplot(fig4)
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                fig1, ax1 = plt.subplots(figsize=(4,3))
+                ax1.plot(res['fpr'], res['tpr'])
+                ax1.plot([0,1],[0,1], linestyle='--')
+                ax1.set_xlabel('FPR')
+                ax1.set_ylabel('TPR')
+                ax1.set_title('ROC curve')
+                plt.tight_layout()
+                st.pyplot(fig1, use_container_width=False)
+            with rc2:
+                fig2, ax2 = plt.subplots(figsize=(4,3))
+                ax2.plot(res['recall'], res['precision'])
+                ax2.set_xlabel('Recall')
+                ax2.set_ylabel('Precision')
+                ax2.set_title(f"PR curve (AP={res['ap']:.3f})")
+                plt.tight_layout()
+                st.pyplot(fig2, use_container_width=False)
+            rc3, rc4 = st.columns(2)
+            with rc3:
+                fig3, ax3 = plt.subplots(figsize=(4,3))
+                im = ax3.imshow(res['cm'])
+                ax3.set_title('Confusion matrix')
+                ax3.set_xticks([0,1])
+                ax3.set_yticks([0,1])
+                ax3.set_xlabel('Predicted')
+                ax3.set_ylabel('True')
+                for (i,j), v in np.ndenumerate(res['cm']):
+                    ax3.text(j, i, str(v), ha='center', va='center')
+                plt.tight_layout()
+                st.pyplot(fig3, use_container_width=False)
+            with rc4:
+                fig4, ax4 = plt.subplots(figsize=(4,3))
+                ax4.plot(res['mean_pred'], res['frac_pos'], marker='o')
+                ax4.plot([0,1],[0,1], linestyle='--')
+                ax4.set_xlabel('Mean predicted prob')
+                ax4.set_ylabel('Fraction positive')
+                ax4.set_title('Calibration curve')
+                plt.tight_layout()
+                st.pyplot(fig4, use_container_width=False)
+            st.session_state._last_figs = [fig1, fig2, fig3, fig4]
 
 with explain_tab:
     model = get_active_model()
