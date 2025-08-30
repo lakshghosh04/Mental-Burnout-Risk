@@ -182,24 +182,24 @@ with predict_tab:
             conf = prob if label==1 else 1-prob
             st.session_state.threshold = thr
             st.session_state.last_prediction = {"risk": prob, "conf": conf}
-            st.empty()
-            if model:
-                with st.container():
-                    st.markdown("**Model card**")
-                    meta = {
-                        "trained": model["trained_at"],
-                        "Data version": model["data_version"],
-                        "rows": model["rows"],
-                        "features": model["features"],
-                        "cv_accuracy": round(model["cv"]["test_accuracy"],3),
-                        "cv_roc_auc": round(model["cv"]["test_roc_auc"],3),
-                        "cv_f1": round(model["cv"]["test_f1"],3),
-                        "threshold": round(st.session_state.threshold,2),
-                        "calibrated": model["options"]["calibrate"],
-                        "class_weight": model["options"]["class_weight"],
-                        "fairness_note": "Gender optional; review bias before deployment."
-                    }
-                    st.json(meta)
+            st.success(f"At-risk probability: {prob*100:.1f}% — {'At-risk' if label==1 else 'Not at-risk'}")
+            left, right = st.columns([1,1])
+            with left:
+                st.metric("Predicted risk", f"{prob*100:.1f}%")
+                st.metric("Label", "At-risk" if label==1 else "Not at-risk")
+                st.metric("Confidence", f"{conf*100:.1f}%")
+                st.progress(prob)
+            with right:
+                st.caption("Model card")
+                mc1, mc2, mc3 = st.columns(3)
+                mc1.metric("Model", model["name"]) 
+                mc2.metric("Data version", model["data_version"]) 
+                mc3.metric("Threshold", f"{st.session_state.threshold:.2f}")
+                mc4, mc5, mc6 = st.columns(3)
+                mc4.metric("CV Acc", f"{model['cv']['test_accuracy']:.3f}")
+                mc5.metric("CV ROC-AUC", f"{model['cv']['test_roc_auc']:.3f}")
+                mc6.metric("CV F1", f"{model['cv']['test_f1']:.3f}")
+                st.caption(f"Trained: {model['trained_at']} • Rows: {model['rows']} • Calibrated: {model['options']['calibrate']} • Class weight: {model['options']['class_weight']}")
 
 with train_tab:
     src = st.radio("Training data", ["Default","Upload"], horizontal=True, key="train_src")
