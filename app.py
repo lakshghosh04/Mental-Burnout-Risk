@@ -33,6 +33,8 @@ if "data_version" not in st.session_state:
     st.session_state.data_version = "—"
 if "data_rows" not in st.session_state:
     st.session_state.data_rows = 0
+if "last_train" not in st.session_state:
+    st.session_state.last_train = None
 
 @st.cache_data(show_spinner=False)
 def load_default_csv():
@@ -232,42 +234,11 @@ with train_tab:
             acc = accuracy_score(yte, preds)
             roc = roc_auc_score(yte, proba)
             f1 = f1_score(yte, preds)
-            st.success(f"Held-out: acc {acc:.3f} | roc_auc {roc:.3f} | f1 {f1:.3f}")
-            fig1, ax1 = plt.subplots()
             fpr, tpr, _ = roc_curve(yte, proba)
-            ax1.plot(fpr, tpr)
-            ax1.plot([0,1],[0,1], linestyle='--')
-            ax1.set_xlabel('FPR')
-            ax1.set_ylabel('TPR')
-            ax1.set_title('ROC curve')
-            st.pyplot(fig1)
-            fig2, ax2 = plt.subplots()
             p, r, _ = precision_recall_curve(yte, proba)
             ap = average_precision_score(yte, proba)
-            ax2.plot(r, p)
-            ax2.set_xlabel('Recall')
-            ax2.set_ylabel('Precision')
-            ax2.set_title(f'PR curve (AP={ap:.3f})')
-            st.pyplot(fig2)
-            fig3, ax3 = plt.subplots()
             cm = confusion_matrix(yte, preds)
-            im = ax3.imshow(cm)
-            ax3.set_title('Confusion matrix')
-            ax3.set_xticks([0,1])
-            ax3.set_yticks([0,1])
-            ax3.set_xlabel('Predicted')
-            ax3.set_ylabel('True')
-            for (i,j), v in np.ndenumerate(cm):
-                ax3.text(j, i, str(v), ha='center', va='center')
-            st.pyplot(fig3)
-            fig4, ax4 = plt.subplots()
             frac_pos, mean_pred = calibration_curve(yte, proba, n_bins=10)
-            ax4.plot(mean_pred, frac_pos, marker='o')
-            ax4.plot([0,1],[0,1], linestyle='--')
-            ax4.set_xlabel('Mean predicted prob')
-            ax4.set_ylabel('Fraction positive')
-            ax4.set_title('Calibration curve')
-            st.pyplot(fig4)
             mid = f"M{len(st.session_state.models)+1}"
             model_record = {
                 "id": mid,
@@ -282,7 +253,44 @@ with train_tab:
             }
             st.session_state.models.append(model_record)
             set_active_model(mid)
-            
+            st.session_state.last_train = {
+                "acc": float(acc), "roc": float(roc), "f1": float(f1),
+                "fpr": fpr, "tpr": tpr, "precision": p, "recall": r, "ap": float(ap),
+                "cm": cm, "mean_pred": mean_pred, "frac_pos": frac_pos
+            }
+        res = st.session_state.last_train
+        if res is not None:
+            st.success(f"Held-out: acc {res['acc']:.3f} | roc_auc {res['roc']:.3f} | f1 {res['f1']:.3f}")
+            fig1, ax1 = plt.subplots()
+            ax1.plot(res['fpr'], res['tpr'])
+            ax1.plot([0,1],[0,1], linestyle='--')
+            ax1.set_xlabel('FPR')
+            ax1.set_ylabel('TPR')
+            ax1.set_title('ROC curve')
+            st.pyplot(fig1)
+            fig2, ax2 = plt.subplots()
+            ax2.plot(res['recall'], res['precision'])
+            ax2.set_xlabel('Recall')
+            ax2.set_ylabel('Precision')
+            ax2.set_title(f"PR curve (AP={res['ap']:.3f})")
+            st.pyplot(fig2)
+            fig3, ax3 = plt.subplots()
+            im = ax3.imshow(res['cm'])
+            ax3.set_title('Confusion matrix')
+            ax3.set_xticks([0,1])
+            ax3.set_yticks([0,1])
+            ax3.set_xlabel('Predicted')
+            ax3.set_ylabel('True')
+            for (i,j), v in np.ndenumerate(res['cm']):
+                ax3.text(j, i, str(v), ha='center', va='center')
+            st.pyplot(fig3)
+            fig4, ax4 = plt.subplots()
+            ax4.plot(res['mean_pred'], res['frac_pos'], marker='o')
+            ax4.plot([0,1],[0,1], linestyle='--')
+            ax4.set_xlabel('Mean predicted prob')
+            ax4.set_ylabel('Fraction positive')
+            ax4.set_title('Calibration curve')
+            st.pyplot(fig4)
 
 with explain_tab:
     model = get_active_model()
