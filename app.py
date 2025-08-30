@@ -282,7 +282,7 @@ with train_tab:
             }
             st.session_state.models.append(model_record)
             set_active_model(mid)
-            st.rerun()
+            
 
 with explain_tab:
     model = get_active_model()
@@ -338,7 +338,7 @@ with models_tab:
                         st.session_state.models.append(obj)
                         set_active_model(obj["id"])
                         st.success("Model added.")
-                        st.rerun()
+                        
                     else:
                         st.error("Invalid model file.")
                 except Exception as e:
