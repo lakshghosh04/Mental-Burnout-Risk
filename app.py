@@ -124,7 +124,7 @@ with colC:
     am = get_active_model()
     st.metric("Model", "—" if am is None else am.get("name","Model"))
 with colD:
-    st.metric("Data ver.", st.session_state.data_version)
+    st.metric("Data version", st.session_state.data_version)
 
 predict_tab, train_tab, explain_tab, models_tab, about_tab = st.tabs(["Predict","Train","Explain","Models","About"])
 
@@ -174,7 +174,7 @@ with predict_tab:
                     st.markdown("**Model card**")
                     st.write({
                         "trained": model["trained_at"],
-                        "data_version": model["data_version"],
+                        "Data version": model["data_version"],
                         "rows": model["rows"],
                         "features": model["features"],
                         "cv_accuracy": round(model["cv"]["test_accuracy"],3),
@@ -291,7 +291,7 @@ with models_tab:
         with st.expander("Active model card"):
             st.write({
                 "trained": picked["trained_at"],
-                "data_version": picked["data_version"],
+                "Data version": picked["data_version"],
                 "rows": picked["rows"],
                 "features": picked["features"],
                 "cv_accuracy": round(picked["cv"]["test_accuracy"],3),
