@@ -10,6 +10,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, roc_auc_score, f1_score
 import joblib
 
@@ -62,10 +63,7 @@ def prepare(df):
     df["gender"] = df["gender"].astype(str)
     for c in num_cols:
         df[c] = df[c].clip(lower=0)
-    for c in num_cols:
-        med = df[c].median()
-        df[c] = df[c].fillna(med)
-    df["target"] = pd.to_numeric(df["target"], errors="coerce").fillna(0).astype(int)
+        df["target"] = pd.to_numeric(df["target"], errors="coerce").fillna(0).astype(int)
     X = df.drop("target", axis=1)
     y = df["target"].values
     return X, y
@@ -74,8 +72,14 @@ def build_pipeline(class_weight, calibrate):
     num_cols = ["age","hours_social","sleep_hours","work_hours"]
     cat_cols = ["gender"]
     pre = ColumnTransformer([
-        ("num", StandardScaler(), num_cols),
-        ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
+        ("num", Pipeline([
+            ("imp", SimpleImputer(strategy="median")),
+            ("sc", StandardScaler()),
+        ]), num_cols),
+        ("cat", Pipeline([
+            ("imp", SimpleImputer(strategy="most_frequent")),
+            ("ohe", OneHotEncoder(handle_unknown="ignore")),
+        ]), cat_cols),
     ])
     base = LogisticRegression(max_iter=500, class_weight=class_weight)
     if calibrate:
@@ -245,7 +249,8 @@ with explain_tab:
         if hasattr(base, "coef_"):
             num_cols = ["age","hours_social","sleep_hours","work_hours"]
             cat_cols = ["gender"]
-            ohe = pipe.named_steps["prep"].named_transformers_["cat"]
+            cat_pipe = pipe.named_steps["prep"].named_transformers_["cat"]
+            ohe = cat_pipe.named_steps["ohe"]
             cat_names = list(ohe.get_feature_names_out(cat_cols))
             feature_names = num_cols + cat_names
             coefs = base.coef_.ravel()
