@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import hashlib
 import io
+import os
 from datetime import datetime
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split, cross_validate, StratifiedKFold
@@ -36,6 +37,9 @@ if "data_version" not in st.session_state:
     st.session_state.data_version = "—"
 if "last_train" not in st.session_state:
     st.session_state.last_train = None
+
+ARTIFACTS_DIR = "artifacts"
+os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 
 @st.cache_data(show_spinner=False)
 def load_default_csv():
@@ -112,6 +116,12 @@ def get_active_model():
 def set_active_model(mid):
     st.session_state.active_model_id = mid
 
+def save_artifact(model_record):
+    mid = model_record["id"]
+    joblib.dump(model_record, os.path.join(ARTIFACTS_DIR, f"{mid}.joblib"))
+    meta = {k:v for k,v in model_record.items() if k!="pipeline"}
+    pd.Series(meta).to_json(os.path.join(ARTIFACTS_DIR, f"{mid}.json"))
+
 st.markdown(
     """
     <style>
@@ -131,7 +141,7 @@ with m2:
 with m3:
     st.metric("Data version", st.session_state.data_version)
 
-predict_tab, train_tab, explain_tab, models_tab, about_tab = st.tabs(["Predict","Train","Explain","Models","About"])
+predict_tab, train_tab, explain_tab, models_tab, about_tab, batch_tab = st.tabs(["Predict","Train","Explain","Models","About","Batch Scoring"])
 
 with predict_tab:
     with st.form("predict_form"):
@@ -191,6 +201,11 @@ with train_tab:
     else:
         X, y = prepare(df)
         st.caption(f"Rows: {len(df)} | Features: {X.shape[1]}")
+        # EDA snapshot
+        with st.expander("EDA Snapshot"):
+            st.write("Class balance:", pd.Series(y).value_counts(normalize=True))
+            st.write("Missing values:", df.isna().sum())
+            st.bar_chart(df[NUM_COLS])
         c0, c1, c2, c3 = st.columns(4)
         with c0:
             model_type = st.selectbox("Model", ["Logistic Regression","Random Forest"], key="model_type")
@@ -238,6 +253,7 @@ with train_tab:
                 "fpr": fpr, "tpr": tpr, "precision": p, "recall": r, "ap": float(ap),
                 "cm": cm, "mean_pred": mean_pred, "frac_pos": frac_pos
             }
+            save_artifact(model_record)
 
     res = st.session_state.last_train
     if res is not None:
@@ -302,46 +318,4 @@ with explain_tab:
         elif hasattr(base, "feature_importances_"):
             imps = base.feature_importances_
             w = pd.DataFrame({"feature": feature_names, "importance": imps}).sort_values("importance", ascending=False)
-            st.dataframe(w, use_container_width=True)
-        else:
-            st.info("No explainability attributes available for this model.")
-
-with models_tab:
-    if len(st.session_state.models) == 0:
-        st.info("No models yet.")
-    else:
-        names = [f"{m['id']} | {m['name']} | {m['data_version']}" for m in st.session_state.models]
-        idx = 0
-        if st.session_state.active_model_id is not None:
-            for i,m in enumerate(st.session_state.models):
-                if m["id"] == st.session_state.active_model_id:
-                    idx = i
-                    break
-        choice = st.radio("Select active model", names, index=idx)
-        picked = st.session_state.models[names.index(choice)]
-        set_active_model(picked["id"])
-        st.session_state.data_version = picked["data_version"]
-        bio = io.BytesIO()
-        joblib.dump(picked, bio)
-        bio.seek(0)
-        st.download_button("Download model", data=bio, file_name=f"{picked['id']}.joblib")
-        with st.expander("Active model card"):
-            meta = {
-                "trained": picked["trained_at"],
-                "Data version": picked["data_version"],
-                "rows": picked["rows"],
-                "features": picked["features"],
-                "cv_accuracy": round(picked["cv"]["test_accuracy"],3),
-                "cv_roc_auc": round(picked["cv"]["test_roc_auc"],3),
-                "cv_f1": round(picked["cv"]["test_f1"],3),
-                "threshold": round(st.session_state.threshold,2),
-                "options": picked["options"],
-                "fairness_note": "Gender optional; review bias before deployment."
-            }
-            st.json(meta)
-
-with about_tab:
-    st.markdown("### About")
-    st.markdown("This app predicts burnout risk from age, gender, social-media hours, sleep hours, and work/study hours.")
-    st.markdown("Data sources: Sleep Health & Lifestyle; Social Media & Mental Health. Target labels follow stress/wellbeing heuristics used in the unified dataset.")
-    st.markdown("Use ethically. Do not use for medical diagnosis.")
+            st.dataframe(w, use
