@@ -189,7 +189,7 @@ with predict_tab:
             with left:
                 st.metric("Predicted risk", f"{prob*100:.1f}%")
                 st.metric("Label", "At-risk" if label==1 else "Not at-risk")
-                st.metric("Confidence", f"{conf*100:.1f}%")
+                
                 st.progress(prob)
             with right:
                 st.caption("Model card")
