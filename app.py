@@ -75,7 +75,7 @@ def prepare(df):
     y = df["target"].values
     return X, y
 
-def build_pipeline(model_type, class_weight, calibrate):
+def build_pipeline(model_type, class_weight, calibration_method):
     num_cols = ["age","hours_social","sleep_hours","work_hours"]
     cat_cols = ["gender"]
     pre = ColumnTransformer([
@@ -92,8 +92,10 @@ def build_pipeline(model_type, class_weight, calibrate):
         base = RandomForestClassifier(n_estimators=300, random_state=42, class_weight=("balanced" if class_weight else None))
     else:
         base = LogisticRegression(max_iter=500, class_weight=("balanced" if class_weight else None))
-    if calibrate:
+    if calibration_method == "Platt (sigmoid)":
         clf = CalibratedClassifierCV(estimator=base, method="sigmoid", cv=5)
+    elif calibration_method == "Isotonic":
+        clf = CalibratedClassifierCV(estimator=base, method="isotonic", cv=5)
     else:
         clf = base
     pipe = Pipeline([
@@ -199,7 +201,7 @@ with predict_tab:
                 mc4.metric("CV Acc", f"{model['cv']['test_accuracy']:.3f}")
                 mc5.metric("CV ROC-AUC", f"{model['cv']['test_roc_auc']:.3f}")
                 mc6.metric("CV F1", f"{model['cv']['test_f1']:.3f}")
-                st.caption(f"Trained: {model['trained_at']} • Rows: {model['rows']} • Calibrated: {model['options']['calibrate']} • Class weight: {model['options']['class_weight']}")
+                st.caption(f"Trained: {model['trained_at']} • Rows: {model['rows']} • Calibration: {model['options'].get('calibration','None')} • Class weight: {model['options']['class_weight']}")
 
 with train_tab:
     src = st.radio("Training data", ["Default","Upload"], horizontal=True, key="train_src")
@@ -221,11 +223,11 @@ with train_tab:
             random_state = st.number_input("Random state", 0, 9999, 42, key="rand_state")
         with c3:
             class_weight_flag = st.checkbox("Use class_weight='balanced'", value=False, key="cw_flag")
-        calibrate_flag = st.checkbox("Calibrate probabilities", value=False, key="cal_flag")
+        calibration_method = st.selectbox("Calibration", ["None","Platt (sigmoid)","Isotonic"], key="cal_method")
         go = st.button("Train model", key="train_btn")
         if go:
             cw = True if class_weight_flag else False
-            pipe = build_pipeline(model_type, cw, calibrate_flag)
+            pipe = build_pipeline(model_type, cw, calibration_method)
             scores = cv_scores(pipe, X, y)
             Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=test_size, random_state=int(random_state), stratify=y)
             pipe.fit(Xtr, ytr)
@@ -249,7 +251,7 @@ with train_tab:
                 "rows": len(df),
                 "features": list(X.columns),
                 "cv": scores,
-                "options": {"model_type": model_type, "calibrate": calibrate_flag, "class_weight": ("balanced" if cw else None)},
+                "options": {"model_type": model_type, "calibration": calibration_method, "class_weight": ("balanced" if cw else None)},
             }
             st.session_state.models.append(model_record)
             set_active_model(mid)
