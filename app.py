@@ -21,6 +21,9 @@ import joblib
 
 st.set_page_config(layout="wide", page_title="Burnout Risk")
 
+NUM_COLS = ["age","hours_social","sleep_hours","work_hours"]
+CAT_COLS = ["gender"]
+
 if "models" not in st.session_state:
     st.session_state.models = []
 if "active_model_id" not in st.session_state:
@@ -28,11 +31,9 @@ if "active_model_id" not in st.session_state:
 if "threshold" not in st.session_state:
     st.session_state.threshold = 0.5
 if "last_prediction" not in st.session_state:
-    st.session_state.last_prediction = {"risk": None, "conf": None}
+    st.session_state.last_prediction = {"risk": None}
 if "data_version" not in st.session_state:
     st.session_state.data_version = "—"
-if "data_rows" not in st.session_state:
-    st.session_state.data_rows = 0
 if "last_train" not in st.session_state:
     st.session_state.last_train = None
 
@@ -61,32 +62,26 @@ def load_data(file):
         return df, hash_bytes(b)
 
 def prepare(df):
-    cols = ["age","gender","hours_social","sleep_hours","work_hours","target"]
-    df = df.copy()
-    df = df[cols]
-    num_cols = ["age","hours_social","sleep_hours","work_hours"]
-    for c in num_cols:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+    cols = NUM_COLS + CAT_COLS + ["target"]
+    df = df.copy()[cols]
+    for c in NUM_COLS:
+        df[c] = pd.to_numeric(df[c], errors="coerce").clip(lower=0)
     df["gender"] = df["gender"].astype(str)
-    for c in num_cols:
-        df[c] = df[c].clip(lower=0)
     df["target"] = pd.to_numeric(df["target"], errors="coerce").fillna(0).astype(int)
     X = df.drop("target", axis=1)
     y = df["target"].values
     return X, y
 
 def build_pipeline(model_type, class_weight, calibration_method):
-    num_cols = ["age","hours_social","sleep_hours","work_hours"]
-    cat_cols = ["gender"]
     pre = ColumnTransformer([
         ("num", Pipeline([
             ("imp", SimpleImputer(strategy="median")),
             ("sc", StandardScaler()),
-        ]), num_cols),
+        ]), NUM_COLS),
         ("cat", Pipeline([
             ("imp", SimpleImputer(strategy="most_frequent")),
             ("ohe", OneHotEncoder(handle_unknown="ignore")),
-        ]), cat_cols),
+        ]), CAT_COLS),
     ])
     if model_type == "Random Forest":
         base = RandomForestClassifier(n_estimators=300, random_state=42, class_weight=("balanced" if class_weight else None))
@@ -98,11 +93,7 @@ def build_pipeline(model_type, class_weight, calibration_method):
         clf = CalibratedClassifierCV(estimator=base, method="isotonic", cv=5)
     else:
         clf = base
-    pipe = Pipeline([
-        ("prep", pre),
-        ("clf", clf)
-    ])
-    return pipe
+    return Pipeline([("prep", pre), ("clf", clf)])
 
 def cv_scores(pipe, X, y):
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
@@ -131,30 +122,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-colA, colB, colC, colD = st.columns(4)
-with colA:
+m1, m2, m3 = st.columns(3)
+with m1:
     st.metric("Predicted Risk", "—" if st.session_state.last_prediction["risk"] is None else f"{st.session_state.last_prediction['risk']*100:.1f}%")
-with colB:
-    st.metric("Confidence", "—" if st.session_state.last_prediction["conf"] is None else f"{st.session_state.last_prediction['conf']*100:.1f}%")
-with colC:
+with m2:
     am = get_active_model()
     st.metric("Model", "—" if am is None else am.get("name","Model"))
-with colD:
+with m3:
     st.metric("Data version", st.session_state.data_version)
 
 predict_tab, train_tab, explain_tab, models_tab, about_tab = st.tabs(["Predict","Train","Explain","Models","About"])
 
 with predict_tab:
-    src = st.radio("Data source", ["Default","Upload"], horizontal=True)
-    file = None
-    if src == "Upload":
-        file = st.file_uploader("CSV", type=["csv"])
-    df, dv = load_data(file)
-    if df is not None:
-        st.session_state.data_version = dv
-        st.session_state.data_rows = len(df)
-        X, y = prepare(df)
-        st.caption(f"Rows: {len(df)} | Features: {X.shape[1]}")
     with st.form("predict_form"):
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -178,18 +157,16 @@ with predict_tab:
             st.warning("Train a model first in the Train tab.")
         else:
             pipe = model["pipeline"]
-            row = pd.DataFrame([{"age":age,"gender":gender,"hours_social":social_h,"sleep_hours":sleep_h,"work_hours":work_h}])
+            row = pd.DataFrame([{ "age":age, "gender":gender, "hours_social":social_h, "sleep_hours":sleep_h, "work_hours":work_h }])
             prob = float(pipe.predict_proba(row)[0,1])
             label = int(prob >= thr)
-            conf = prob if label==1 else 1-prob
             st.session_state.threshold = thr
-            st.session_state.last_prediction = {"risk": prob, "conf": conf}
+            st.session_state.last_prediction = {"risk": prob}
             st.success(f"At-risk probability: {prob*100:.1f}% — {'At-risk' if label==1 else 'Not at-risk'}")
             left, right = st.columns([1,1])
             with left:
                 st.metric("Predicted risk", f"{prob*100:.1f}%")
                 st.metric("Label", "At-risk" if label==1 else "Not at-risk")
-                
                 st.progress(prob)
             with right:
                 st.caption("Model card")
@@ -255,6 +232,7 @@ with train_tab:
             }
             st.session_state.models.append(model_record)
             set_active_model(mid)
+            st.session_state.data_version = dv
             st.session_state.last_train = {
                 "acc": float(acc), "roc": float(roc), "f1": float(f1),
                 "fpr": fpr, "tpr": tpr, "precision": p, "recall": r, "ap": float(ap),
@@ -263,48 +241,47 @@ with train_tab:
 
     res = st.session_state.last_train
     if res is not None:
-            st.success(f"Held-out: acc {res['acc']:.3f} | roc_auc {res['roc']:.3f} | f1 {res['f1']:.3f}")
-            rc1, rc2 = st.columns(2)
-            with rc1:
-                fig1, ax1 = plt.subplots(figsize=(4,3))
-                ax1.plot(res['fpr'], res['tpr'])
-                ax1.plot([0,1],[0,1], linestyle='--')
-                ax1.set_xlabel('FPR')
-                ax1.set_ylabel('TPR')
-                ax1.set_title('ROC curve')
-                plt.tight_layout()
-                st.pyplot(fig1, use_container_width=False)
-            with rc2:
-                fig2, ax2 = plt.subplots(figsize=(4,3))
-                ax2.plot(res['recall'], res['precision'])
-                ax2.set_xlabel('Recall')
-                ax2.set_ylabel('Precision')
-                ax2.set_title(f"PR curve (AP={res['ap']:.3f})")
-                plt.tight_layout()
-                st.pyplot(fig2, use_container_width=False)
-            rc3, rc4 = st.columns(2)
-            with rc3:
-                fig3, ax3 = plt.subplots(figsize=(4,3))
-                im = ax3.imshow(res['cm'])
-                ax3.set_title('Confusion matrix')
-                ax3.set_xticks([0,1])
-                ax3.set_yticks([0,1])
-                ax3.set_xlabel('Predicted')
-                ax3.set_ylabel('True')
-                for (i,j), v in np.ndenumerate(res['cm']):
-                    ax3.text(j, i, str(v), ha='center', va='center')
-                plt.tight_layout()
-                st.pyplot(fig3, use_container_width=False)
-            with rc4:
-                fig4, ax4 = plt.subplots(figsize=(4,3))
-                ax4.plot(res['mean_pred'], res['frac_pos'], marker='o')
-                ax4.plot([0,1],[0,1], linestyle='--')
-                ax4.set_xlabel('Mean predicted prob')
-                ax4.set_ylabel('Fraction positive')
-                ax4.set_title('Calibration curve')
-                plt.tight_layout()
-                st.pyplot(fig4, use_container_width=False)
-            st.session_state._last_figs = [fig1, fig2, fig3, fig4]
+        st.success(f"Held-out: acc {res['acc']:.3f} | roc_auc {res['roc']:.3f} | f1 {res['f1']:.3f}")
+        rc1, rc2 = st.columns(2)
+        with rc1:
+            fig1, ax1 = plt.subplots(figsize=(4,3))
+            ax1.plot(res['fpr'], res['tpr'])
+            ax1.plot([0,1],[0,1], linestyle='--')
+            ax1.set_xlabel('FPR')
+            ax1.set_ylabel('TPR')
+            ax1.set_title('ROC curve')
+            plt.tight_layout()
+            st.pyplot(fig1, use_container_width=False)
+        with rc2:
+            fig2, ax2 = plt.subplots(figsize=(4,3))
+            ax2.plot(res['recall'], res['precision'])
+            ax2.set_xlabel('Recall')
+            ax2.set_ylabel('Precision')
+            ax2.set_title(f"PR curve (AP={res['ap']:.3f})")
+            plt.tight_layout()
+            st.pyplot(fig2, use_container_width=False)
+        rc3, rc4 = st.columns(2)
+        with rc3:
+            fig3, ax3 = plt.subplots(figsize=(4,3))
+            im = ax3.imshow(res['cm'])
+            ax3.set_title('Confusion matrix')
+            ax3.set_xticks([0,1])
+            ax3.set_yticks([0,1])
+            ax3.set_xlabel('Predicted')
+            ax3.set_ylabel('True')
+            for (i,j), v in np.ndenumerate(res['cm']):
+                ax3.text(j, i, str(v), ha='center', va='center')
+            plt.tight_layout()
+            st.pyplot(fig3, use_container_width=False)
+        with rc4:
+            fig4, ax4 = plt.subplots(figsize=(4,3))
+            ax4.plot(res['mean_pred'], res['frac_pos'], marker='o')
+            ax4.plot([0,1],[0,1], linestyle='--')
+            ax4.set_xlabel('Mean predicted prob')
+            ax4.set_ylabel('Fraction positive')
+            ax4.set_title('Calibration curve')
+            plt.tight_layout()
+            st.pyplot(fig4, use_container_width=False)
 
 with explain_tab:
     model = get_active_model()
@@ -314,12 +291,10 @@ with explain_tab:
         pipe = model["pipeline"]
         clf_step = pipe.named_steps["clf"]
         base = getattr(clf_step, "base_estimator", None) or getattr(clf_step, "estimator", None) or clf_step
-        num_cols = ["age","hours_social","sleep_hours","work_hours"]
-        cat_cols = ["gender"]
         cat_pipe = pipe.named_steps["prep"].named_transformers_["cat"]
         ohe = cat_pipe.named_steps["ohe"]
-        cat_names = list(ohe.get_feature_names_out(cat_cols))
-        feature_names = num_cols + cat_names
+        cat_names = list(ohe.get_feature_names_out(CAT_COLS))
+        feature_names = NUM_COLS + cat_names
         if hasattr(base, "coef_"):
             coefs = base.coef_.ravel()
             w = pd.DataFrame({"feature": feature_names, "weight": coefs}).sort_values("weight", ascending=False)
@@ -345,26 +320,11 @@ with models_tab:
         choice = st.radio("Select active model", names, index=idx)
         picked = st.session_state.models[names.index(choice)]
         set_active_model(picked["id"])
-        c1, c2 = st.columns(2)
-        with c1:
-            bio = io.BytesIO()
-            joblib.dump(picked, bio)
-            bio.seek(0)
-            st.download_button("Download model", data=bio, file_name=f"{picked['id']}.joblib")
-        with c2:
-            up = st.file_uploader("Upload model file", type=["joblib"], key="upload_model")
-            if up is not None:
-                try:
-                    obj = joblib.load(up)
-                    if isinstance(obj, dict) and "pipeline" in obj:
-                        st.session_state.models.append(obj)
-                        set_active_model(obj["id"])
-                        st.success("Model added.")
-                        
-                    else:
-                        st.error("Invalid model file.")
-                except Exception as e:
-                    st.error("Could not load model.")
+        st.session_state.data_version = picked["data_version"]
+        bio = io.BytesIO()
+        joblib.dump(picked, bio)
+        bio.seek(0)
+        st.download_button("Download model", data=bio, file_name=f"{picked['id']}.joblib")
         with st.expander("Active model card"):
             meta = {
                 "trained": picked["trained_at"],
