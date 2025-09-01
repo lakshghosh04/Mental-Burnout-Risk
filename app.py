@@ -383,3 +383,4 @@ with batch_tab:
                 st.download_button("Download results", data=csv, file_name="batch_predictions.csv", mime="text/csv")
             except Exception as e:
                 st.error(f"Error scoring batch: {e}")
+ 
