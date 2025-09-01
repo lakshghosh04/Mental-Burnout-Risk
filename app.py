@@ -360,3 +360,26 @@ with about_tab:
     st.markdown("This app predicts burnout risk from age, gender, social-media hours, sleep hours, and work/study hours.")
     st.markdown("Data sources: Sleep Health & Lifestyle; Social Media & Mental Health. Target labels follow stress/wellbeing heuristics used in the unified dataset.")
     st.markdown("Use ethically. Do not use for medical diagnosis.")
+
+with batch_tab:
+    st.markdown("### Batch Scoring")
+    model = get_active_model()
+    if model is None:
+        st.info("Train or select a model first.")
+    else:
+        up = st.file_uploader("Upload CSV with columns: age, gender, hours_social, sleep_hours, work_hours", type=["csv"], key="batch_csv")
+        if up is not None:
+            df_in = pd.read_csv(up)
+            st.write("Preview:", df_in.head())
+            try:
+                pipe = model["pipeline"]
+                probs = pipe.predict_proba(df_in)[:,1]
+                preds = (probs >= st.session_state.threshold).astype(int)
+                df_out = df_in.copy()
+                df_out["burnout_prob"] = probs
+                df_out["burnout_pred"] = preds
+                st.write("Scored sample:", df_out.head())
+                csv = df_out.to_csv(index=False).encode()
+                st.download_button("Download results", data=csv, file_name="batch_predictions.csv", mime="text/csv")
+            except Exception as e:
+                st.error(f"Error scoring batch: {e}")
