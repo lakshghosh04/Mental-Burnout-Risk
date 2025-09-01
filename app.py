@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -316,4 +317,47 @@ with explain_tab:
             st.dataframe(w, use_container_width=True)
         elif hasattr(base, "feature_importances_"):
             imps = base.feature_importances_
-            w = pd.DataFrame({"feature": feature_names, "
+            w = pd.DataFrame({"feature": feature_names, "importance": imps}).sort_values("importance", ascending=False)
+            st.dataframe(w, use_container_width=True)
+        else:
+            st.info("No explainability attributes available for this model.")
+
+with models_tab:
+    if len(st.session_state.models) == 0:
+        st.info("No models yet.")
+    else:
+        names = [f"{m['id']} | {m['name']} | {m['data_version']}" for m in st.session_state.models]
+        idx = 0
+        if st.session_state.active_model_id is not None:
+            for i, m in enumerate(st.session_state.models):
+                if m["id"] == st.session_state.active_model_id:
+                    idx = i
+                    break
+        choice = st.radio("Select active model", names, index=idx)
+        picked = st.session_state.models[names.index(choice)]
+        set_active_model(picked["id"])
+        st.session_state.data_version = picked["data_version"]
+        bio = io.BytesIO()
+        joblib.dump(picked, bio)
+        bio.seek(0)
+        st.download_button("Download model", data=bio, file_name=f"{picked['id']}.joblib")
+        with st.expander("Active model card"):
+            meta = {
+                "trained": picked["trained_at"],
+                "Data version": picked["data_version"],
+                "rows": picked["rows"],
+                "features": picked["features"],
+                "cv_accuracy": round(picked["cv"]["test_accuracy"],3),
+                "cv_roc_auc": round(picked["cv"]["test_roc_auc"],3),
+                "cv_f1": round(picked["cv"]["test_f1"],3),
+                "threshold": round(st.session_state.threshold,2),
+                "options": picked["options"],
+                "fairness_note": "Gender optional; review bias before deployment."
+            }
+            st.json(meta)
+
+with about_tab:
+    st.markdown("### About")
+    st.markdown("This app predicts burnout risk from age, gender, social-media hours, sleep hours, and work/study hours.")
+    st.markdown("Data sources: Sleep Health & Lifestyle; Social Media & Mental Health. Target labels follow stress/wellbeing heuristics used in the unified dataset.")
+    st.markdown("Use ethically. Do not use for medical diagnosis.")
