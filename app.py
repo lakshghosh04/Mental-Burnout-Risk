@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -22,7 +23,7 @@ import joblib
 
 st.set_page_config(layout="wide", page_title="Burnout Risk")
 
-NUM_COLS = ["age","hours_social","sleep_hours","work_hours"]
+NUM_COLS = ["age", "hours_social", "sleep_hours", "work_hours"]
 CAT_COLS = ["gender"]
 
 if "models" not in st.session_state:
@@ -101,9 +102,9 @@ def build_pipeline(model_type, class_weight, calibration_method):
 
 def cv_scores(pipe, X, y):
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    scoring = {"accuracy":"accuracy","roc_auc":"roc_auc","f1":"f1"}
+    scoring = {"accuracy": "accuracy", "roc_auc": "roc_auc", "f1": "f1"}
     out = cross_validate(pipe, X, y, cv=cv, scoring=scoring, n_jobs=None)
-    return {k: float(np.mean(v)) for k,v in out.items() if k.startswith("test_")}
+    return {k: float(np.mean(v)) for k, v in out.items() if k.startswith("test_")}
 
 def get_active_model():
     if st.session_state.active_model_id is None:
@@ -119,7 +120,7 @@ def set_active_model(mid):
 def save_artifact(model_record):
     mid = model_record["id"]
     joblib.dump(model_record, os.path.join(ARTIFACTS_DIR, f"{mid}.joblib"))
-    meta = {k:v for k,v in model_record.items() if k!="pipeline"}
+    meta = {k: v for k, v in model_record.items() if k != "pipeline"}
     pd.Series(meta).to_json(os.path.join(ARTIFACTS_DIR, f"{mid}.json"))
 
 st.markdown(
@@ -137,11 +138,11 @@ with m1:
     st.metric("Predicted Risk", "—" if st.session_state.last_prediction["risk"] is None else f"{st.session_state.last_prediction['risk']*100:.1f}%")
 with m2:
     am = get_active_model()
-    st.metric("Model", "—" if am is None else am.get("name","Model"))
+    st.metric("Model", "—" if am is None else am.get("name", "Model"))
 with m3:
     st.metric("Data version", st.session_state.data_version)
 
-predict_tab, train_tab, explain_tab, models_tab, about_tab, batch_tab = st.tabs(["Predict","Train","Explain","Models","About","Batch Scoring"])
+predict_tab, train_tab, explain_tab, models_tab, about_tab, batch_tab = st.tabs(["Predict", "Train", "Explain", "Models", "About", "Batch Scoring"])
 
 with predict_tab:
     with st.form("predict_form"):
@@ -153,7 +154,7 @@ with predict_tab:
             social_h = st.number_input("Social hours", min_value=0.0, max_value=24.0, value=3.0, step=0.5, help="Per day")
             work_h = st.number_input("Work/Study hours", min_value=0.0, max_value=24.0, value=8.0, step=0.5, help="Per day")
         with c3:
-            gender = st.selectbox("Gender", ["male","female","other"], help="Optional category")
+            gender = st.selectbox("Gender", ["male", "female", "other"], help="Optional category")
         adv = st.expander("Advanced")
         with adv:
             thr = st.slider("Decision threshold", 0.0, 1.0, float(st.session_state.threshold), 0.01)
@@ -167,13 +168,13 @@ with predict_tab:
             st.warning("Train a model first in the Train tab.")
         else:
             pipe = model["pipeline"]
-            row = pd.DataFrame([{ "age":age, "gender":gender, "hours_social":social_h, "sleep_hours":sleep_h, "work_hours":work_h }])
-            prob = float(pipe.predict_proba(row)[0,1])
+            row = pd.DataFrame([{ "age": age, "gender": gender, "hours_social": social_h, "sleep_hours": sleep_h, "work_hours": work_h }])
+            prob = float(pipe.predict_proba(row)[0, 1])
             label = int(prob >= thr)
             st.session_state.threshold = thr
             st.session_state.last_prediction = {"risk": prob}
             st.success(f"At-risk probability: {prob*100:.1f}% — {'At-risk' if label==1 else 'Not at-risk'}")
-            left, right = st.columns([1,1])
+            left, right = st.columns([1, 1])
             with left:
                 st.metric("Predicted risk", f"{prob*100:.1f}%")
                 st.metric("Label", "At-risk" if label==1 else "Not at-risk")
@@ -181,8 +182,8 @@ with predict_tab:
             with right:
                 st.caption("Model card")
                 mc1, mc2, mc3 = st.columns(3)
-                mc1.metric("Model", model["name"]) 
-                mc2.metric("Data version", model["data_version"]) 
+                mc1.metric("Model", model["name"])
+                mc2.metric("Data version", model["data_version"])
                 mc3.metric("Threshold", f"{st.session_state.threshold:.2f}")
                 mc4, mc5, mc6 = st.columns(3)
                 mc4.metric("CV Acc", f"{model['cv']['test_accuracy']:.3f}")
@@ -191,7 +192,7 @@ with predict_tab:
                 st.caption(f"Trained: {model['trained_at']} • Rows: {model['rows']} • Calibration: {model['options'].get('calibration','None')} • Class weight: {model['options']['class_weight']}")
 
 with train_tab:
-    src = st.radio("Training data", ["Default","Upload"], horizontal=True, key="train_src")
+    src = st.radio("Training data", ["Default", "Upload"], horizontal=True, key="train_src")
     file = None
     if src == "Upload":
         file = st.file_uploader("CSV for training", type=["csv"], key="train_csv")
@@ -201,21 +202,20 @@ with train_tab:
     else:
         X, y = prepare(df)
         st.caption(f"Rows: {len(df)} | Features: {X.shape[1]}")
-        # EDA snapshot
         with st.expander("EDA Snapshot"):
             st.write("Class balance:", pd.Series(y).value_counts(normalize=True))
             st.write("Missing values:", df.isna().sum())
             st.bar_chart(df[NUM_COLS])
         c0, c1, c2, c3 = st.columns(4)
         with c0:
-            model_type = st.selectbox("Model", ["Logistic Regression","Random Forest"], key="model_type")
+            model_type = st.selectbox("Model", ["Logistic Regression", "Random Forest"], key="model_type")
         with c1:
             test_size = st.slider("Test split", 0.1, 0.4, 0.2, 0.05, key="test_split")
         with c2:
             random_state = st.number_input("Random state", 0, 9999, 42, key="rand_state")
         with c3:
             class_weight_flag = st.checkbox("Use class_weight='balanced'", value=False, key="cw_flag")
-        calibration_method = st.selectbox("Calibration", ["None","Platt (sigmoid)","Isotonic"], key="cal_method")
+        calibration_method = st.selectbox("Calibration", ["None", "Platt (sigmoid)", "Isotonic"], key="cal_method")
         go = st.button("Train model", key="train_btn")
         if go:
             cw = True if class_weight_flag else False
@@ -223,7 +223,7 @@ with train_tab:
             scores = cv_scores(pipe, X, y)
             Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=test_size, random_state=int(random_state), stratify=y)
             pipe.fit(Xtr, ytr)
-            proba = pipe.predict_proba(Xte)[:,1]
+            proba = pipe.predict_proba(Xte)[:, 1]
             preds = (proba >= st.session_state.threshold).astype(int)
             acc = accuracy_score(yte, preds)
             roc = roc_auc_score(yte, proba)
@@ -285,7 +285,7 @@ with train_tab:
             ax3.set_yticks([0,1])
             ax3.set_xlabel('Predicted')
             ax3.set_ylabel('True')
-            for (i,j), v in np.ndenumerate(res['cm']):
+            for (i, j), v in np.ndenumerate(res['cm']):
                 ax3.text(j, i, str(v), ha='center', va='center')
             plt.tight_layout()
             st.pyplot(fig3, use_container_width=False)
@@ -317,5 +317,4 @@ with explain_tab:
             st.dataframe(w, use_container_width=True)
         elif hasattr(base, "feature_importances_"):
             imps = base.feature_importances_
-            w = pd.DataFrame({"feature": feature_names, "importance": imps}).sort_values("importance", ascending=False)
-            st.dataframe(w, use
+            w = pd.DataFrame({"feature": feature_names, "
