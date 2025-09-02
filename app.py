@@ -217,38 +217,50 @@ with predict_tab:
                 mc5.metric("CV ROC-AUC", f"{model['cv']['test_roc_auc']:.3f}")
                 mc6.metric("CV F1", f"{model['cv']['test_f1']:.3f}")
                 st.caption(f"Target: {model.get('label_name','target')} • Trained: {model['trained_at']} • Rows: {model['rows']} • Calibration: {model['options'].get('calibration','None')} • Class weight: {model['options']['class_weight']}")
-        st.markdown("#### What-if: minimal changes to flip decision")
+        st.markdown("#### Small changes that flip the decision")
         model = get_active_model()
         if model is not None:
             pipe = model["pipeline"]
             label_name = model.get("label_name", "target")
-            current = pd.DataFrame([{"age": age if 'age' in model['num_cols'] else 0, "gender": gender, "hours_social": social_h if 'hours_social' in model['num_cols'] else 0, "sleep_hours": sleep_h if 'sleep_hours' in model['num_cols'] else 0, "work_hours": work_h if 'work_hours' in model['num_cols'] else 0}])
+            current = pd.DataFrame([{
+                "age": age if "age" in model["num_cols"] else 0,
+                "gender": gender,
+                "hours_social": social_h if "hours_social" in model["num_cols"] else 0,
+                "sleep_hours": sleep_h if "sleep_hours" in model["num_cols"] else 0,
+                "work_hours": work_h if "work_hours" in model["num_cols"] else 0
+            }])
             base_p = proba_for_row(pipe, current)
-            desired = "down" if label_name == "target" else "up"
             best = None
             steps = np.arange(0.0, 3.5, 0.5)
             for ds in steps:
                 for dw in steps:
                     for dso in steps:
                         trial = current.copy()
-                        if 'sleep_hours' in model['num_cols']:
-                            trial.loc[0, 'sleep_hours'] = np.clip(trial.loc[0, 'sleep_hours'] + ds, 0, 24)
-                        if 'work_hours' in model['num_cols']:
-                            trial.loc[0, 'work_hours'] = np.clip(trial.loc[0, 'work_hours'] + dw, 0, 24)
-                        if 'hours_social' in model['num_cols']:
-                            trial.loc[0, 'hours_social'] = np.clip(trial.loc[0, 'hours_social'] - dso, 0, 24)
+                        if "sleep_hours" in model["num_cols"]:
+                            trial.loc[0, "sleep_hours"] = np.clip(trial.loc[0, "sleep_hours"] + ds, 0, 24)
+                        if "work_hours" in model["num_cols"]:
+                            trial.loc[0, "work_hours"] = np.clip(trial.loc[0, "work_hours"] + dw, 0, 24)
+                        if "hours_social" in model["num_cols"]:
+                            trial.loc[0, "hours_social"] = np.clip(trial.loc[0, "hours_social"] - dso, 0, 24)
                         p = proba_for_row(pipe, trial)
-                        if label_name == "target":
-                            ok = p < st.session_state.threshold
-                        else:
-                            ok = p >= st.session_state.threshold
+                        ok = (p < st.session_state.threshold) if (label_name == "target") else (p >= st.session_state.threshold)
                         if ok:
                             change = ds + dw + dso
                             if best is None or change < best["change"]:
-                                best = {"sleep_delta": ds if 'sleep_hours' in model['num_cols'] else 0.0, "work_delta": dw if 'work_hours' in model['num_cols'] else 0.0, "social_delta": dso if 'hours_social' in model['num_cols'] else 0.0, "new_prob": p, "change": change}
+                                best = {
+                                    "sleep_delta": ds if "sleep_hours" in model["num_cols"] else 0.0,
+                                    "work_delta": dw if "work_hours" in model["num_cols"] else 0.0,
+                                    "social_delta": dso if "hours_social" in model["num_cols"] else 0.0,
+                                    "new_prob": p,
+                                    "change": change
+                                }
             if best is None:
                 st.info("No small change within 3 hours found to flip the decision.")
             else:
+                if label_name == "target":
+                    st.success(f"Do this: sleep +{best['sleep_delta']:.1f} h, work +{best['work_delta']:.1f} h, social -{best['social_delta']:.1f} h. New burnout risk: {best['new_prob']*100:.1f}%.")
+                else:
+                    st.success(f"Do this: sleep +{best['sleep_delta']:.1f} h, work +{best['work_delta']:.1f} h, social -{best['social_delta']:.1f} h. New good productivity: {best['new_prob']*100:.1f}%.")
                 cfx1, cfx2, cfx3, cfx4 = st.columns(4)
                 cfx1.metric("Increase sleep by", f"{best['sleep_delta']:.1f} h")
                 cfx2.metric("Increase work by", f"{best['work_delta']:.1f} h")
@@ -256,7 +268,7 @@ with predict_tab:
                 if label_name == "target":
                     cfx4.metric("New burnout risk", f"{best['new_prob']*100:.1f}%")
                 else:
-                    cfx4.metric("New good productivity prob", f"{best['new_prob']*100:.1f}%")
+                    cfx4.metric("New good productivity", f"{best['new_prob']*100:.1f}%")
 
 with train_tab:
     src = st.radio("Training data", ["Default", "Upload"], horizontal=True, key="train_src")
@@ -495,8 +507,8 @@ with models_tab:
 
 with about_tab:
     st.markdown("### About")
-    st.markdown("This app predicts burnout risk or productivity using age, gender, social-media hours, sleep hours, and work or study hours.")
-    st.markdown("Data sources: Sleep Health and Lifestyle; Social Media and Mental Health; Students Social Media Addiction.")
+    st.markdown("This app predicts burnout risk or productivity using age, gender, social media hours, sleep hours, and work or study hours.")
+    st.markdown("Data sources: Sleep Health and Lifestyle, Social Media and Mental Health, Students Social Media Addiction.")
     st.markdown("This is for learning and screening, not diagnosis.")
 
 with batch_tab:
