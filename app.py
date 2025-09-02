@@ -72,9 +72,10 @@ def normalize_schema(df):
     for a, b in alias.items():
         if a in df.columns and b not in df.columns:
             df = df.rename(columns={a: b})
-    prod_guess = next((c for c in df.columns if "product" in c and c != "target"), None)
-    if prod_guess and "productivity" not in df.columns:
-        df = df.rename(columns={prod_guess: "productivity"})
+    if "productivity" not in df.columns:
+        prod_guess = next((c for c in df.columns if c.startswith("product") and c != "target"), None)
+        if prod_guess:
+            df = df.rename(columns={prod_guess: "productivity"})
     return df
 
 def clean_and_filter(df, target_col):
@@ -242,16 +243,33 @@ with train_tab:
         df = normalize_schema(df)
         target_choice = st.selectbox("Select target to predict", ["Burnout", "Productivity"], key="target_sel")
         target_col = "target" if target_choice == "Burnout" else "productivity"
+
+        if target_choice == "Productivity" and "productivity" not in df.columns:
+            up_prod = st.file_uploader("Upload productivity CSV (must include: age, gender, hours_social, sleep_hours, work_hours, productivity)", type=["csv"], key="prod_csv")
+            if up_prod is not None:
+                add = pd.read_csv(up_prod)
+                add = normalize_schema(add)
+                need = set(NUM_COLS_BASE + CAT_COLS_BASE + ["productivity"])
+                if need.issubset(set(add.columns)):
+                    df = pd.concat([df, add[NUM_COLS_BASE + CAT_COLS_BASE + ["productivity"]]], ignore_index=True)
+                    df = normalize_schema(df)
+                else:
+                    st.error(f"Uploaded file missing columns. Needed: {sorted(list(need))}")
+                    st.stop()
+
         if target_col not in df.columns:
             st.error(f"Column '{target_col}' not found. Available: {list(df.columns)}")
             st.stop()
+
         X, y, num_cols, cat_cols = clean_and_filter(df, target_col)
         st.caption(f"Rows for {target_choice}: {len(X)} | Features used: {len(num_cols) + len(cat_cols)}")
+
         with st.expander("EDA Snapshot"):
             st.write("Class balance:", pd.Series(y).value_counts(normalize=True))
             st.write("Missing values (subset):", df[df[target_col].notna()][num_cols + cat_cols].isna().sum())
             if len(num_cols) > 0:
                 st.bar_chart(df[df[target_col].notna()][num_cols])
+
         c0, c1, c2, c3 = st.columns(4)
         with c0:
             model_type = st.selectbox("Model", ["Logistic Regression", "Random Forest"], key="model_type")
@@ -263,6 +281,7 @@ with train_tab:
             class_weight_flag = st.checkbox("Use class_weight='balanced'", value=False, key="cw_flag")
         calibration_method = st.selectbox("Calibration", ["None", "Platt (sigmoid)", "Isotonic"], key="cal_method")
         go = st.button("Train model", key="train_btn")
+
         if go:
             if len(np.unique(y)) < 2:
                 st.error("Target has a single class. Provide data with both classes.")
@@ -284,6 +303,7 @@ with train_tab:
                 ap = average_precision_score(yte, proba)
                 cm = confusion_matrix(yte, preds)
                 frac_pos, mean_pred = calibration_curve(yte, proba, n_bins=10)
+
                 mid = f"M{len(st.session_state.models)+1}"
                 model_record = {
                     "id": mid,
