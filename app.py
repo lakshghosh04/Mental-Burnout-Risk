@@ -41,8 +41,7 @@ os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 @st.cache_data(show_spinner=False)
 def load_default_csv():
     try:
-        df = pd.read_csv("Data/unified_with_productivity.csv")
-        return df
+        return pd.read_csv("Data/unified_with_productivity.csv")
     except Exception:
         return None
 
@@ -57,10 +56,9 @@ def load_data(file):
             return None, None
         b = df.to_csv(index=False).encode()
         return df, hash_bytes(b)
-    else:
-        b = file.read()
-        df = pd.read_csv(io.BytesIO(b))
-        return df, hash_bytes(b)
+    b = file.read()
+    df = pd.read_csv(io.BytesIO(b))
+    return df, hash_bytes(b)
 
 def normalize_schema(df):
     df = df.copy()
@@ -70,9 +68,9 @@ def normalize_schema(df):
         if a in df.columns and b not in df.columns:
             df = df.rename(columns={a: b})
     if "productivity" not in df.columns:
-        prod_guess = next((c for c in df.columns if c.startswith("product") and c != "target"), None)
-        if prod_guess:
-            df = df.rename(columns={prod_guess: "productivity"})
+        guess = [c for c in df.columns if c.startswith("product") and c != "target"]
+        if len(guess) == 1:
+            df = df.rename(columns={guess[0]: "productivity"})
     return df
 
 def clean_and_filter(df, target_col):
@@ -81,10 +79,7 @@ def clean_and_filter(df, target_col):
     for c in ["age", "hours_social", "sleep_hours", "work_hours"]:
         if c in use.columns:
             use[c] = pd.to_numeric(use[c], errors="coerce")
-            if c == "age":
-                use[c] = use[c].clip(0, 100)
-            else:
-                use[c] = use[c].clip(0, 24)
+            use[c] = use[c].clip(0, 100 if c == "age" else 24)
     num_cols = [c for c in NUM_COLS_BASE if c in use.columns and not use[c].isna().all()]
     cat_cols = [c for c in CAT_COLS_BASE if c in use.columns]
     X = use[num_cols + cat_cols]
@@ -93,14 +88,8 @@ def clean_and_filter(df, target_col):
 
 def build_pipeline(num_cols, cat_cols, model_type, class_weight, calibration_method):
     pre = ColumnTransformer([
-        ("num", Pipeline([
-            ("imp", SimpleImputer(strategy="median")),
-            ("sc", StandardScaler()),
-        ]), num_cols),
-        ("cat", Pipeline([
-            ("imp", SimpleImputer(strategy="most_frequent")),
-            ("ohe", OneHotEncoder(handle_unknown="ignore")),
-        ]), cat_cols),
+        ("num", Pipeline([("imp", SimpleImputer(strategy="median")), ("sc", StandardScaler())]), num_cols),
+        ("cat", Pipeline([("imp", SimpleImputer(strategy="most_frequent")), ("ohe", OneHotEncoder(handle_unknown="ignore"))]), cat_cols),
     ])
     if model_type == "Random Forest":
         base = RandomForestClassifier(n_estimators=300, random_state=42, class_weight=("balanced" if class_weight else None))
@@ -142,18 +131,8 @@ def proba_for_row(pipe, row):
 
 def ensure_reasonable_threshold():
     if st.session_state.threshold < 0.1:
-        st.warning("Threshold is very low. Using 0.10 to avoid misleading labels.")
+        st.warning("Threshold too low. Using 0.10.")
         st.session_state.threshold = 0.1
-
-st.markdown(
-    """
-    <style>
-    .tiny {font-size:12px;color:#666}
-    .metric-card {padding:0.5rem 1rem;border:1px solid #eee;border-radius:12px;background:#fafafa}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
 
 m1, m2, m3 = st.columns(3)
 with m1:
@@ -214,14 +193,14 @@ with predict_tab:
                     st.progress(low_prod_risk)
             with right:
                 st.caption("Model card")
-                mc1, mc2, mc3 = st.columns(3)
-                mc1.metric("Model", model["name"])
-                mc2.metric("Data version", model["data_version"])
-                mc3.metric("Threshold", f"{st.session_state.threshold:.2f}")
-                mc4, mc5, mc6 = st.columns(3)
-                mc4.metric("CV Acc", f"{model['cv']['test_accuracy']:.3f}")
-                mc5.metric("CV ROC-AUC", f"{model['cv']['test_roc_auc']:.3f}")
-                mc6.metric("CV F1", f"{model['cv']['test_f1']:.3f}")
+                a1, a2, a3 = st.columns(3)
+                a1.metric("Model", model["name"])
+                a2.metric("Data version", model["data_version"])
+                a3.metric("Threshold", f"{st.session_state.threshold:.2f}")
+                b1, b2, b3 = st.columns(3)
+                b1.metric("CV Acc", f"{model['cv']['test_accuracy']:.3f}")
+                b2.metric("CV ROC-AUC", f"{model['cv']['test_roc_auc']:.3f}")
+                b3.metric("CV F1", f"{model['cv']['test_f1']:.3f}")
                 st.caption(f"Target: {model.get('label_name','target')} • Trained: {model['trained_at']} • Rows: {model['rows']} • Calibration: {model['options'].get('calibration','None')} • Class weight: {model['options']['class_weight']}")
 
         st.markdown("#### Small changes that flip the decision")
@@ -230,7 +209,6 @@ with predict_tab:
             ensure_reasonable_threshold()
             pipe = model["pipeline"]
             label_name = model.get("label_name", "target")
-
             current = pd.DataFrame([{
                 "age": age if "age" in model["num_cols"] else 0,
                 "gender": gender,
@@ -238,11 +216,9 @@ with predict_tab:
                 "sleep_hours": sleep_h if "sleep_hours" in model["num_cols"] else 0,
                 "work_hours": work_h if "work_hours" in model["num_cols"] else 0
             }])
-
             base_p = proba_for_row(pipe, current)
             base_pred = 1 if base_p >= st.session_state.threshold else 0
             desired_pred = 0 if label_name == "target" else 1
-
             if base_pred == desired_pred:
                 st.info("You already meet the goal at the current threshold.")
             else:
@@ -253,7 +229,6 @@ with predict_tab:
                     steps = np.arange(0.5, 5.5, 0.5)
                     best_flip = None
                     best_improve = None
-
                     for ds in steps:
                         for dw in steps:
                             for dso in steps:
@@ -264,28 +239,21 @@ with predict_tab:
                                     trial.loc[0, "work_hours"] = np.clip(trial.loc[0, "work_hours"] + dw, 0, 24)
                                 if "hours_social" in actionable:
                                     trial.loc[0, "hours_social"] = np.clip(trial.loc[0, "hours_social"] - dso, 0, 24)
-
                                 p = proba_for_row(pipe, trial)
                                 pred = 1 if p >= st.session_state.threshold else 0
                                 total_change = ds + dw + dso
-
                                 if pred == desired_pred:
                                     if best_flip is None or total_change < best_flip["change"]:
                                         best_flip = {"sleep": ds, "work": dw, "social": dso, "new_p": p, "change": total_change}
                                 else:
-                                    if label_name == "target":
-                                        improve = base_p - p
-                                    else:
-                                        improve = p - base_p
+                                    improve = (base_p - p) if label_name == "target" else (p - base_p)
                                     if best_improve is None or improve > best_improve["improve"] or (np.isclose(improve, best_improve["improve"]) and total_change < best_improve["change"]):
                                         best_improve = {"sleep": ds, "work": dw, "social": dso, "new_p": p, "improve": improve, "change": total_change}
-
                     if best_flip is not None:
                         if label_name == "target":
                             st.success(f"Do this: sleep +{best_flip['sleep']:.1f} h, work +{best_flip['work']:.1f} h, social -{best_flip['social']:.1f} h. New burnout risk: {best_flip['new_p']*100:.1f}%.")
                         else:
                             st.success(f"Do this: sleep +{best_flip['sleep']:.1f} h, work +{best_flip['work']:.1f} h, social -{best_flip['social']:.1f} h. New good productivity: {best_flip['new_p']*100:.1f}%.")
-
                         c1x, c2x, c3x, c4x = st.columns(4)
                         c1x.metric("Increase sleep by", f"{best_flip['sleep']:.1f} h")
                         c2x.metric("Increase work by", f"{best_flip['work']:.1f} h")
@@ -302,21 +270,18 @@ with predict_tab:
                                 st.info(f"No small change found to flip. Closest change: sleep +{best_improve['sleep']:.1f} h, work +{best_improve['work']:.1f} h, social -{best_improve['social']:.1f} h. New burnout risk: {best_improve['new_p']*100:.1f}%.")
                             else:
                                 st.info(f"No small change found to flip. Closest change: sleep +{best_improve['sleep']:.1f} h, work +{best_improve['work']:.1f} h, social -{best_improve['social']:.1f} h. New good productivity: {best_improve['new_p']*100:.1f}%.")
-
-                            c1x, c2x, c3x, c4x = st.columns(4)
-                            c1x.metric("Increase sleep by", f"{best_improve['sleep']:.1f} h")
-                            c2x.metric("Increase work by", f"{best_improve['work']:.1f} h")
-                            c3x.metric("Reduce social by", f"{best_improve['social']:.1f} h")
+                            d1, d2, d3, d4 = st.columns(4)
+                            d1.metric("Increase sleep by", f"{best_improve['sleep']:.1f} h")
+                            d2.metric("Increase work by", f"{best_improve['work']:.1f} h")
+                            d3.metric("Reduce social by", f"{best_improve['social']:.1f} h")
                             if label_name == "target":
-                                c4x.metric("New burnout risk", f"{best_improve['new_p']*100:.1f}%")
+                                d4.metric("New burnout risk", f"{best_improve['new_p']*100:.1f}%")
                             else:
-                                c4x.metric("New good productivity", f"{best_improve['new_p']*100:.1f}%")
+                                d4.metric("New good productivity", f"{best_improve['new_p']*100:.1f}%")
 
 with train_tab:
     src = st.radio("Training data", ["Default", "Upload"], horizontal=True, key="train_src")
-    file = None
-    if src == "Upload":
-        file = st.file_uploader("CSV for training", type=["csv"], key="train_csv")
+    file = st.file_uploader("CSV for training", type=["csv"], key="train_csv") if src == "Upload" else None
     df, dv = load_data(file)
     if df is None:
         st.info("Provide a CSV or keep Default once available.")
@@ -372,7 +337,7 @@ with train_tab:
                 roc = roc_auc_score(yte, proba)
                 f1 = f1_score(yte, preds)
                 fpr, tpr, _ = roc_curve(yte, proba)
-                p, r, _ = precision_recall_curve(yte, proba)
+                pr_p, pr_r, _ = precision_recall_curve(yte, proba)
                 ap = average_precision_score(yte, proba)
                 cm = confusion_matrix(yte, preds)
                 frac_pos, mean_pred = calibration_curve(yte, proba, n_bins=10)
@@ -401,7 +366,7 @@ with train_tab:
                 st.session_state.data_version = dv
                 st.session_state.last_train = {
                     "acc": float(acc), "roc": float(roc), "f1": float(f1),
-                    "fpr": fpr, "tpr": tpr, "precision": p, "recall": r, "ap": float(ap),
+                    "fpr": fpr, "tpr": tpr, "precision": pr_p, "recall": pr_r, "ap": float(ap),
                     "cm": cm, "mean_pred": mean_pred, "frac_pos": frac_pos
                 }
                 save_artifact(model_record)
@@ -409,44 +374,44 @@ with train_tab:
     res = st.session_state.last_train
     if res is not None:
         st.success(f"Held-out: acc {res['acc']:.3f} | roc_auc {res['roc']:.3f} | f1 {res['f1']:.3f}")
-        rc1, rc2 = st.columns(2)
-        with rc1:
-            fig1, ax1 = plt.subplots(figsize=(4,3))
-            ax1.plot(res['fpr'], res['tpr'])
-            ax1.plot([0,1],[0,1], linestyle='--')
-            ax1.set_xlabel('FPR')
-            ax1.set_ylabel('TPR')
-            ax1.set_title('ROC curve')
+        g1, g2 = st.columns(2)
+        with g1:
+            fig1, ax1 = plt.subplots(figsize=(4, 3))
+            ax1.plot(res["fpr"], res["tpr"])
+            ax1.plot([0, 1], [0, 1], linestyle="--")
+            ax1.set_xlabel("FPR")
+            ax1.set_ylabel("TPR")
+            ax1.set_title("ROC curve")
             plt.tight_layout()
             st.pyplot(fig1, use_container_width=False)
-        with rc2:
-            fig2, ax2 = plt.subplots(figsize=(4,3))
-            ax2.plot(res['recall'], res['precision'])
-            ax2.set_xlabel('Recall')
-            ax2.set_ylabel('Precision')
+        with g2:
+            fig2, ax2 = plt.subplots(figsize=(4, 3))
+            ax2.plot(res["recall"], res["precision"])
+            ax2.set_xlabel("Recall")
+            ax2.set_ylabel("Precision")
             ax2.set_title(f"PR curve (AP={res['ap']:.3f})")
             plt.tight_layout()
             st.pyplot(fig2, use_container_width=False)
-        rc3, rc4 = st.columns(2)
-        with rc3:
-            fig3, ax3 = plt.subplots(figsize=(4,3))
-            ax3.imshow(res['cm'])
-            ax3.set_title('Confusion matrix')
-            ax3.set_xticks([0,1])
-            ax3.set_yticks([0,1])
-            ax3.set_xlabel('Predicted')
-            ax3.set_ylabel('True')
-            for (i, j), v in np.ndenumerate(res['cm']):
-                ax3.text(j, i, str(v), ha='center', va='center')
+        g3, g4 = st.columns(2)
+        with g3:
+            fig3, ax3 = plt.subplots(figsize=(4, 3))
+            ax3.imshow(res["cm"])
+            ax3.set_title("Confusion matrix")
+            ax3.set_xticks([0, 1])
+            ax3.set_yticks([0, 1])
+            ax3.set_xlabel("Predicted")
+            ax3.set_ylabel("True")
+            for (i, j), v in np.ndenumerate(res["cm"]):
+                ax3.text(j, i, str(v), ha="center", va="center")
             plt.tight_layout()
             st.pyplot(fig3, use_container_width=False)
-        with rc4:
-            fig4, ax4 = plt.subplots(figsize=(4,3))
-            ax4.plot(res['mean_pred'], res['frac_pos'], marker='o')
-            ax4.plot([0,1],[0,1], linestyle='--')
-            ax4.set_xlabel('Mean predicted prob')
-            ax4.set_ylabel('Fraction positive')
-            ax4.set_title('Calibration curve')
+        with g4:
+            fig4, ax4 = plt.subplots(figsize=(4, 3))
+            ax4.plot(res["mean_pred"], res["frac_pos"], marker="o")
+            ax4.plot([0, 1], [0, 1], linestyle="--")
+            ax4.set_xlabel("Mean predicted prob")
+            ax4.set_ylabel("Fraction positive")
+            ax4.set_title("Calibration curve")
             plt.tight_layout()
             st.pyplot(fig4, use_container_width=False)
 
@@ -491,10 +456,10 @@ with fairness_tab:
     else:
         df_eval = model["eval_df"].copy()
         thr = st.session_state.threshold
-        df_eval["group_gender"] = df_eval["gender"].astype(str).str.lower().where(df_eval["gender"].isin(["male","female"]), "other")
+        df_eval["group_gender"] = df_eval["gender"].astype(str).str.lower().where(df_eval["gender"].isin(["male", "female"]), "other")
         bins = [0, 19, 29, 39, 49, 200]
         labels = ["<20", "20s", "30s", "40s", "50+"]
-        df_eval["group_age"] = pd.cut(pd.to_numeric(df_eval["age"], errors="coerce").fillna(0), bins=bins, labels=labels, right=True, include_lowest=True)
+        df_eval["group_age"] = pd.cut(pd.to_numeric(df_eval["age"], errors="coerce").fillna(0), bins=bins, labels=labels, include_lowest=True)
         def group_table(col):
             rows = []
             for g, d in df_eval.groupby(col):
@@ -502,11 +467,11 @@ with fairness_tab:
                     continue
                 y, p = d["y_true"].values, d["proba"].values
                 pred = (p >= thr).astype(int)
-                tpr = ((pred==1) & (y==1)).sum() / max((y==1).sum(), 1)
-                fpr = ((pred==1) & (y==0)).sum() / max((y==0).sum(), 1)
+                tpr = ((pred == 1) & (y == 1)).sum() / max((y == 1).sum(), 1)
+                fpr = ((pred == 1) & (y == 0)).sum() / max((y == 0).sum(), 1)
                 auc = roc_auc_score(y, p)
                 acc = accuracy_score(y, pred)
-                rows.append({"group": str(g), "n": len(d), "auc": round(auc,3), "tpr": round(tpr,3), "fpr": round(fpr,3), "acc": round(acc,3)})
+                rows.append({"group": str(g), "n": len(d), "auc": round(auc, 3), "tpr": round(tpr, 3), "fpr": round(fpr, 3), "acc": round(acc, 3)})
             return pd.DataFrame(rows).sort_values("group")
         st.markdown("#### By gender")
         gtab = group_table("group_gender")
@@ -549,11 +514,11 @@ with models_tab:
                 "Data version": picked["data_version"],
                 "rows": picked["rows"],
                 "features": picked["features"],
-                "cv_accuracy": round(picked["cv"]["test_accuracy"],3),
-                "cv_roc_auc": round(picked["cv"]["test_roc_auc"],3),
-                "cv_f1": round(picked["cv"]["test_f1"],3),
-                "threshold": round(st.session_state.threshold,2),
-                "target": picked.get("label_name","target"),
+                "cv_accuracy": round(picked["cv"]["test_accuracy"], 3),
+                "cv_roc_auc": round(picked["cv"]["test_roc_auc"], 3),
+                "cv_f1": round(picked["cv"]["test_f1"], 3),
+                "threshold": round(st.session_state.threshold, 2),
+                "target": picked.get("label_name", "target"),
                 "options": picked["options"],
                 "fairness_note": "Check Fairness tab for group metrics."
             }
@@ -581,10 +546,10 @@ with batch_tab:
             else:
                 try:
                     pipe = model["pipeline"]
-                    probs = pipe.predict_proba(df_in[req])[:,1]
+                    probs = pipe.predict_proba(df_in[req])[:, 1]
                     preds = (probs >= st.session_state.threshold).astype(int)
                     df_out = df_in.copy()
-                    label_name = model.get("label_name","target")
+                    label_name = model.get("label_name", "target")
                     df_out[f"{label_name}_prob"] = probs
                     df_out[f"{label_name}_pred"] = preds
                     st.write("Scored sample:", df_out.head())
