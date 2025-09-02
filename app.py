@@ -140,6 +140,11 @@ def save_artifact(model_record):
 def proba_for_row(pipe, row):
     return float(pipe.predict_proba(row)[0, 1])
 
+def ensure_reasonable_threshold():
+    if st.session_state.threshold < 0.1:
+        st.warning("Threshold is very low. Using 0.10 to avoid misleading labels.")
+        st.session_state.threshold = 0.1
+
 st.markdown(
     """
     <style>
@@ -185,23 +190,24 @@ with predict_tab:
                 thr = st.slider("Decision threshold", 0.0, 1.0, float(st.session_state.threshold), 0.01)
             sub = st.form_submit_button("Predict")
         if sub:
+            st.session_state.threshold = thr
+            ensure_reasonable_threshold()
             pipe = model["pipeline"]
             row = pd.DataFrame([{"age": age, "gender": gender, "hours_social": social_h, "sleep_hours": sleep_h, "work_hours": work_h}])
             prob1 = proba_for_row(pipe, row)
-            st.session_state.threshold = thr
             st.session_state.last_prediction = {"risk": prob1}
             left, right = st.columns([1, 1])
             if label_name == "target":
-                label = int(prob1 >= thr)
-                st.success(f"Burnout risk: {prob1*100:.1f}% ({'At risk' if label==1 else 'Not at risk'})")
+                pred = int(prob1 >= st.session_state.threshold)
+                st.success(f"Burnout risk: {prob1*100:.1f}% ({'At risk' if pred==1 else 'Not at risk'})")
                 with left:
                     st.metric("Burnout risk", f"{prob1*100:.1f}%")
-                    st.metric("Label", "At risk" if label==1 else "Not at risk")
+                    st.metric("Label", "At risk" if pred==1 else "Not at risk")
                     st.progress(prob1)
             else:
-                label = int(prob1 >= thr)
+                pred = int(prob1 >= st.session_state.threshold)
                 low_prod_risk = 1.0 - prob1
-                st.success(f"Productivity: {prob1*100:.1f}% ({'Good productivity' if label==1 else 'Low productivity'})")
+                st.success(f"Productivity: {prob1*100:.1f}% ({'Good productivity' if pred==1 else 'Low productivity'})")
                 with left:
                     st.metric("Good productivity probability", f"{prob1*100:.1f}%")
                     st.metric("Low productivity risk", f"{low_prod_risk*100:.1f}%")
@@ -220,6 +226,7 @@ with predict_tab:
         st.markdown("#### Small changes that flip the decision")
         model = get_active_model()
         if model is not None:
+            ensure_reasonable_threshold()
             pipe = model["pipeline"]
             label_name = model.get("label_name", "target")
             current = pd.DataFrame([{
@@ -230,45 +237,57 @@ with predict_tab:
                 "work_hours": work_h if "work_hours" in model["num_cols"] else 0
             }])
             base_p = proba_for_row(pipe, current)
+            base_pred = 1 if base_p >= st.session_state.threshold else 0
+            if label_name == "target":
+                want_pred = 0 if base_pred == 1 else 1
+            else:
+                want_pred = 1 if base_pred == 0 else 0
             best = None
             steps = np.arange(0.0, 3.5, 0.5)
-            for ds in steps:
-                for dw in steps:
-                    for dso in steps:
-                        trial = current.copy()
-                        if "sleep_hours" in model["num_cols"]:
-                            trial.loc[0, "sleep_hours"] = np.clip(trial.loc[0, "sleep_hours"] + ds, 0, 24)
-                        if "work_hours" in model["num_cols"]:
-                            trial.loc[0, "work_hours"] = np.clip(trial.loc[0, "work_hours"] + dw, 0, 24)
-                        if "hours_social" in model["num_cols"]:
-                            trial.loc[0, "hours_social"] = np.clip(trial.loc[0, "hours_social"] - dso, 0, 24)
-                        p = proba_for_row(pipe, trial)
-                        ok = (p < st.session_state.threshold) if (label_name == "target") else (p >= st.session_state.threshold)
-                        if ok:
-                            change = ds + dw + dso
-                            if best is None or change < best["change"]:
-                                best = {
-                                    "sleep_delta": ds if "sleep_hours" in model["num_cols"] else 0.0,
-                                    "work_delta": dw if "work_hours" in model["num_cols"] else 0.0,
-                                    "social_delta": dso if "hours_social" in model["num_cols"] else 0.0,
-                                    "new_prob": p,
-                                    "change": change
-                                }
-            if best is None:
-                st.info("No small change within 3 hours found to flip the decision.")
+            if base_pred == want_pred:
+                if label_name == "target":
+                    st.info("You already meet the goal at the current threshold.")
+                else:
+                    st.info("You already meet the goal at the current threshold.")
             else:
-                if label_name == "target":
-                    st.success(f"Do this: sleep +{best['sleep_delta']:.1f} h, work +{best['work_delta']:.1f} h, social -{best['social_delta']:.1f} h. New burnout risk: {best['new_prob']*100:.1f}%.")
+                for ds in steps:
+                    for dw in steps:
+                        for dso in steps:
+                            trial = current.copy()
+                            if "sleep_hours" in model["num_cols"]:
+                                trial.loc[0, "sleep_hours"] = np.clip(trial.loc[0, "sleep_hours"] + ds, 0, 24)
+                            if "work_hours" in model["num_cols"]:
+                                trial.loc[0, "work_hours"] = np.clip(trial.loc[0, "work_hours"] + dw, 0, 24)
+                            if "hours_social" in model["num_cols"]:
+                                trial.loc[0, "hours_social"] = np.clip(trial.loc[0, "hours_social"] - dso, 0, 24)
+                            p = proba_for_row(pipe, trial)
+                            pred = 1 if p >= st.session_state.threshold else 0
+                            ok = (pred == want_pred)
+                            if ok:
+                                change = ds + dw + dso
+                                if best is None or change < best["change"]:
+                                    best = {
+                                        "sleep_delta": ds if "sleep_hours" in model["num_cols"] else 0.0,
+                                        "work_delta": dw if "work_hours" in model["num_cols"] else 0.0,
+                                        "social_delta": dso if "hours_social" in model["num_cols"] else 0.0,
+                                        "new_prob": p,
+                                        "change": change
+                                    }
+                if best is None:
+                    st.info("No small change within 3 hours found to flip the decision.")
                 else:
-                    st.success(f"Do this: sleep +{best['sleep_delta']:.1f} h, work +{best['work_delta']:.1f} h, social -{best['social_delta']:.1f} h. New good productivity: {best['new_prob']*100:.1f}%.")
-                cfx1, cfx2, cfx3, cfx4 = st.columns(4)
-                cfx1.metric("Increase sleep by", f"{best['sleep_delta']:.1f} h")
-                cfx2.metric("Increase work by", f"{best['work_delta']:.1f} h")
-                cfx3.metric("Reduce social by", f"{best['social_delta']:.1f} h")
-                if label_name == "target":
-                    cfx4.metric("New burnout risk", f"{best['new_prob']*100:.1f}%")
-                else:
-                    cfx4.metric("New good productivity", f"{best['new_prob']*100:.1f}%")
+                    if label_name == "target":
+                        st.success(f"Do this: sleep +{best['sleep_delta']:.1f} h, work +{best['work_delta']:.1f} h, social -{best['social_delta']:.1f} h. New burnout risk: {best['new_prob']*100:.1f}%.")
+                    else:
+                        st.success(f"Do this: sleep +{best['sleep_delta']:.1f} h, work +{best['work_delta']:.1f} h, social -{best['social_delta']:.1f} h. New good productivity: {best['new_prob']*100:.1f}%.")
+                    cfx1, cfx2, cfx3, cfx4 = st.columns(4)
+                    cfx1.metric("Increase sleep by", f"{best['sleep_delta']:.1f} h")
+                    cfx2.metric("Increase work by", f"{best['work_delta']:.1f} h")
+                    cfx3.metric("Reduce social by", f"{best['social_delta']:.1f} h")
+                    if label_name == "target":
+                        cfx4.metric("New burnout risk", f"{best['new_prob']*100:.1f}%")
+                    else:
+                        cfx4.metric("New good productivity", f"{best['new_prob']*100:.1f}%")
 
 with train_tab:
     src = st.radio("Training data", ["Default", "Upload"], horizontal=True, key="train_src")
@@ -319,8 +338,8 @@ with train_tab:
             if len(np.unique(y)) < 2:
                 st.error("Target has a single class. Provide data with both classes.")
             else:
-                cw = True if class_weight_flag else False
-                pipe = build_pipeline(num_cols, cat_cols, model_type, cw, calibration_method)
+                st.session_state.threshold = 0.5
+                pipe = build_pipeline(num_cols, cat_cols, model_type, class_weight_flag, calibration_method)
                 scores = cv_scores(pipe, X, y)
                 Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=test_size, random_state=int(random_state), stratify=y)
                 pipe.fit(Xtr, ytr)
@@ -352,7 +371,7 @@ with train_tab:
                     "label_name": target_col,
                     "cv": scores,
                     "eval_df": eval_df,
-                    "options": {"model_type": model_type, "calibration": calibration_method, "class_weight": ("balanced" if cw else None)},
+                    "options": {"model_type": model_type, "calibration": calibration_method, "class_weight": ("balanced" if class_weight_flag else None)},
                 }
                 st.session_state.models.append(model_record)
                 set_active_model(mid)
@@ -496,6 +515,7 @@ with models_tab:
         picked = st.session_state.models[names.index(choice)]
         set_active_model(picked["id"])
         st.session_state.data_version = picked["data_version"]
+        st.session_state.threshold = 0.5
         bio = io.BytesIO()
         joblib.dump(picked, bio)
         bio.seek(0)
