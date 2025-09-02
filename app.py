@@ -65,6 +65,18 @@ def load_data(file):
         df = pd.read_csv(io.BytesIO(b))
         return df, hash_bytes(b)
 
+def normalize_schema(df):
+    df = df.copy()
+    df.columns = [c.strip().lower() for c in df.columns]
+    alias = {"burnout": "target", "burnout_risk": "target", "label": "target", "risk": "target"}
+    for a, b in alias.items():
+        if a in df.columns and b not in df.columns:
+            df = df.rename(columns={a: b})
+    prod_guess = next((c for c in df.columns if "product" in c and c != "target"), None)
+    if prod_guess and "productivity" not in df.columns:
+        df = df.rename(columns={prod_guess: "productivity"})
+    return df
+
 def clean_and_filter(df, target_col):
     use = df[df[target_col].notna()].copy()
     use["gender"] = use["gender"].astype(str)
@@ -227,10 +239,12 @@ with train_tab:
     if df is None:
         st.info("Provide a CSV or keep Default once available.")
     else:
-        df.columns = [c.strip().lower() for c in df.columns]
-        df = df.rename(columns={"burnout":"target","burnout_risk":"target","label":"target","productivity_label":"productivity"})
+        df = normalize_schema(df)
         target_choice = st.selectbox("Select target to predict", ["Burnout", "Productivity"], key="target_sel")
         target_col = "target" if target_choice == "Burnout" else "productivity"
+        if target_col not in df.columns:
+            st.error(f"Column '{target_col}' not found. Available: {list(df.columns)}")
+            st.stop()
         X, y, num_cols, cat_cols = clean_and_filter(df, target_col)
         st.caption(f"Rows for {target_choice}: {len(X)} | Features used: {len(num_cols) + len(cat_cols)}")
         with st.expander("EDA Snapshot"):
@@ -363,4 +377,85 @@ with explain_tab:
             imps = base.feature_importances_
             w = pd.DataFrame({"feature": feature_names, "importance": imps}).sort_values("importance", ascending=False)
             st.dataframe(w, use_container_width=True)
-       
+        else:
+            st.info("No explainability attributes available for this model.")
+
+with models_tab:
+    if len(st.session_state.models) == 0:
+        st.info("No models yet.")
+    else:
+        names = [
+            f"{m['id']} | {m['name']} | {m['data_version']} | label={m.get('label_name','target')}"
+            for m in st.session_state.models
+        ]
+        idx = 0
+        if st.session_state.active_model_id is not None:
+            for i, m in enumerate(st.session_state.models):
+                if m["id"] == st.session_state.active_model_id:
+                    idx = i
+                    break
+        choice = st.radio("Select active model", names, index=idx)
+        picked = st.session_state.models[names.index(choice)]
+        set_active_model(picked["id"])
+        st.session_state.data_version = picked["data_version"]
+        bio = io.BytesIO()
+        joblib.dump(picked, bio)
+        bio.seek(0)
+        st.download_button("Download model", data=bio, file_name=f"{picked['id']}.joblib")
+        with st.expander("Active model card"):
+            meta = {
+                "trained": picked["trained_at"],
+                "Data version": picked["data_version"],
+                "rows": picked["rows"],
+                "features": picked["features"],
+                "cv_accuracy": round(picked["cv"]["test_accuracy"],3),
+                "cv_roc_auc": round(picked["cv"]["test_roc_auc"],3),
+                "cv_f1": round(picked["cv"]["test_f1"],3),
+                "threshold": round(st.session_state.threshold,2),
+                "target": picked.get("label_name","target"),
+                "options": picked["options"],
+                "fairness_note": "Gender optional; review bias before deployment."
+            }
+            st.json(meta)
+
+with about_tab:
+    st.markdown("### About")
+    st.markdown("This app predicts burnout risk or productivity using age, gender, social-media hours, sleep hours, and work/study hours.")
+    st.markdown("Data sources: Sleep Health & Lifestyle; Social Media & Mental Health; Students Social Media Addiction.")
+    st.markdown("This is for learning and screening, not diagnosis.")
+
+with batch_tab:
+    st.markdown("### Batch Scoring")
+    model = get_active_model()
+    if model is None:
+        st.info("Train or select a model first.")
+    else:
+        up = st.file_uploader(
+            "Upload CSV with columns: age, gender, hours_social, sleep_hours, work_hours",
+            type=["csv"], key="batch_csv"
+        )
+        if up is not None:
+            df_in = pd.read_csv(up)
+            req = model["num_cols"] + model["cat_cols"]
+            missing = [c for c in req if c not in df_in.columns]
+            if missing:
+                st.error(f"Missing columns: {missing}")
+            else:
+                try:
+                    pipe = model["pipeline"]
+                    probs = pipe.predict_proba(df_in[req])[:,1]
+                    preds = (probs >= st.session_state.threshold).astype(int)
+                    df_out = df_in.copy()
+                    label_name = model.get("label_name","target")
+                    df_out[f"{label_name}_prob"] = probs
+                    df_out[f"{label_name}_pred"] = preds
+                    st.write("Scored sample:", df_out.head())
+                    csv = df_out.to_csv(index=False).encode()
+                    st.download_button(
+                        "Download results",
+                        data=csv,
+                        file_name="batch_predictions.csv",
+                        mime="text/csv"
+                    )
+                except Exception as e:
+                    st.error(f"Error scoring batch: {e}")
