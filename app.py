@@ -230,6 +230,7 @@ with predict_tab:
             ensure_reasonable_threshold()
             pipe = model["pipeline"]
             label_name = model.get("label_name", "target")
+
             current = pd.DataFrame([{
                 "age": age if "age" in model["num_cols"] else 0,
                 "gender": gender,
@@ -240,70 +241,76 @@ with predict_tab:
 
             base_p = proba_for_row(pipe, current)
             base_pred = 1 if base_p >= st.session_state.threshold else 0
-            want_pred = (0 if label_name == "target" else 1) if base_pred == 1 else (1 if label_name == "target" else 0)
+            desired_pred = 0 if label_name == "target" else 1
 
-            actionable = [c for c in ["sleep_hours", "work_hours", "hours_social"] if c in model["num_cols"]]
-            if len(actionable) == 0:
-                st.info("No adjustable features available for this model.")
+            if base_pred == desired_pred:
+                st.info("You already meet the goal at the current threshold.")
             else:
-                steps = np.arange(0.0, 5.5, 0.5)
-                best_flip = None
-                best_improve = {"delta": 1.0, "sleep": 0.0, "work": 0.0, "social": 0.0, "new_p": base_p}
-
-                for ds in steps:
-                    for dw in steps:
-                        for dso in steps:
-                            trial = current.copy()
-                            if "sleep_hours" in actionable:
-                                trial.loc[0, "sleep_hours"] = np.clip(trial.loc[0, "sleep_hours"] + ds, 0, 24)
-                            if "work_hours" in actionable:
-                                trial.loc[0, "work_hours"] = np.clip(trial.loc[0, "work_hours"] + dw, 0, 24)
-                            if "hours_social" in actionable:
-                                trial.loc[0, "hours_social"] = np.clip(trial.loc[0, "hours_social"] - dso, 0, 24)
-
-                            p = proba_for_row(pipe, trial)
-                            pred = 1 if p >= st.session_state.threshold else 0
-                            changed = ds + dw + dso
-
-                            if pred == want_pred:
-                                if best_flip is None or changed < best_flip["change"]:
-                                    best_flip = {"sleep": ds, "work": dw, "social": dso, "new_p": p, "change": changed}
-                            else:
-                                if label_name == "target":
-                                    delta = p - base_p
-                                else:
-                                    delta = (1 - p) - (1 - base_p)
-                                if delta < best_improve["delta"]:
-                                    best_improve = {"delta": delta, "sleep": ds, "work": dw, "social": dso, "new_p": p}
-
-                if best_flip is not None:
-                    if label_name == "target":
-                        st.success(f"Do this: sleep +{best_flip['sleep']:.1f} h, work +{best_flip['work']:.1f} h, social -{best_flip['social']:.1f} h. New burnout risk: {best_flip['new_p']*100:.1f}%.")
-                    else:
-                        st.success(f"Do this: sleep +{best_flip['sleep']:.1f} h, work +{best_flip['work']:.1f} h, social -{best_flip['social']:.1f} h. New good productivity: {best_flip['new_p']*100:.1f}%.")
-
-                    c1x, c2x, c3x, c4x = st.columns(4)
-                    c1x.metric("Increase sleep by", f"{best_flip['sleep']:.1f} h")
-                    c2x.metric("Increase work by", f"{best_flip['work']:.1f} h")
-                    c3x.metric("Reduce social by", f"{best_flip['social']:.1f} h")
-                    if label_name == "target":
-                        c4x.metric("New burnout risk", f"{best_flip['new_p']*100:.1f}%")
-                    else:
-                        c4x.metric("New good productivity", f"{best_flip['new_p']*100:.1f}%")
+                actionable = [c for c in ["sleep_hours", "work_hours", "hours_social"] if c in model["num_cols"]]
+                if len(actionable) == 0:
+                    st.info("No adjustable features available for this model.")
                 else:
-                    if label_name == "target":
-                        st.info(f"No small change found to flip. Closest change: sleep +{best_improve['sleep']:.1f} h, work +{best_improve['work']:.1f} h, social -{best_improve['social']:.1f} h. New burnout risk: {best_improve['new_p']*100:.1f}%.")
-                    else:
-                        st.info(f"No small change found to flip. Closest change: sleep +{best_improve['sleep']:.1f} h, work +{best_improve['work']:.1f} h, social -{best_improve['social']:.1f} h. New good productivity: {best_improve['new_p']*100:.1f}%.")
+                    steps = np.arange(0.5, 5.5, 0.5)
+                    best_flip = None
+                    best_improve = None
 
-                    c1x, c2x, c3x, c4x = st.columns(4)
-                    c1x.metric("Increase sleep by", f"{best_improve['sleep']:.1f} h")
-                    c2x.metric("Increase work by", f"{best_improve['work']:.1f} h")
-                    c3x.metric("Reduce social by", f"{best_improve['social']:.1f} h")
-                    if label_name == "target":
-                        c4x.metric("New burnout risk", f"{best_improve['new_p']*100:.1f}%")
+                    for ds in steps:
+                        for dw in steps:
+                            for dso in steps:
+                                trial = current.copy()
+                                if "sleep_hours" in actionable:
+                                    trial.loc[0, "sleep_hours"] = np.clip(trial.loc[0, "sleep_hours"] + ds, 0, 24)
+                                if "work_hours" in actionable:
+                                    trial.loc[0, "work_hours"] = np.clip(trial.loc[0, "work_hours"] + dw, 0, 24)
+                                if "hours_social" in actionable:
+                                    trial.loc[0, "hours_social"] = np.clip(trial.loc[0, "hours_social"] - dso, 0, 24)
+
+                                p = proba_for_row(pipe, trial)
+                                pred = 1 if p >= st.session_state.threshold else 0
+                                total_change = ds + dw + dso
+
+                                if pred == desired_pred:
+                                    if best_flip is None or total_change < best_flip["change"]:
+                                        best_flip = {"sleep": ds, "work": dw, "social": dso, "new_p": p, "change": total_change}
+                                else:
+                                    if label_name == "target":
+                                        improve = base_p - p
+                                    else:
+                                        improve = p - base_p
+                                    if best_improve is None or improve > best_improve["improve"] or (np.isclose(improve, best_improve["improve"]) and total_change < best_improve["change"]):
+                                        best_improve = {"sleep": ds, "work": dw, "social": dso, "new_p": p, "improve": improve, "change": total_change}
+
+                    if best_flip is not None:
+                        if label_name == "target":
+                            st.success(f"Do this: sleep +{best_flip['sleep']:.1f} h, work +{best_flip['work']:.1f} h, social -{best_flip['social']:.1f} h. New burnout risk: {best_flip['new_p']*100:.1f}%.")
+                        else:
+                            st.success(f"Do this: sleep +{best_flip['sleep']:.1f} h, work +{best_flip['work']:.1f} h, social -{best_flip['social']:.1f} h. New good productivity: {best_flip['new_p']*100:.1f}%.")
+
+                        c1x, c2x, c3x, c4x = st.columns(4)
+                        c1x.metric("Increase sleep by", f"{best_flip['sleep']:.1f} h")
+                        c2x.metric("Increase work by", f"{best_flip['work']:.1f} h")
+                        c3x.metric("Reduce social by", f"{best_flip['social']:.1f} h")
+                        if label_name == "target":
+                            c4x.metric("New burnout risk", f"{best_flip['new_p']*100:.1f}%")
+                        else:
+                            c4x.metric("New good productivity", f"{best_flip['new_p']*100:.1f}%")
                     else:
-                        c4x.metric("New good productivity", f"{best_improve['new_p']*100:.1f}%")
+                        if best_improve is None or best_improve["improve"] <= 0:
+                            st.info("No small change up to 5 hours improved the outcome.")
+                        else:
+                            if label_name == "target":
+                                st.info(f"No small change found to flip. Closest change: sleep +{best_improve['sleep']:.1f} h, work +{best_improve['work']:.1f} h, social -{best_improve['social']:.1f} h. New burnout risk: {best_improve['new_p']*100:.1f}%.")
+                            else:
+                                st.info(f"No small change found to flip. Closest change: sleep +{best_improve['sleep']:.1f} h, work +{best_improve['work']:.1f} h, social -{best_improve['social']:.1f} h. New good productivity: {best_improve['new_p']*100:.1f}%.")
+
+                            c1x, c2x, c3x, c4x = st.columns(4)
+                            c1x.metric("Increase sleep by", f"{best_improve['sleep']:.1f} h")
+                            c2x.metric("Increase work by", f"{best_improve['work']:.1f} h")
+                            c3x.metric("Reduce social by", f"{best_improve['social']:.1f} h")
+                            if label_name == "target":
+                                c4x.metric("New burnout risk", f"{best_improve['new_p']*100:.1f}%")
+                            else:
+                                c4x.metric("New good productivity", f"{best_improve['new_p']*100:.1f}%")
 
 with train_tab:
     src = st.radio("Training data", ["Default", "Upload"], horizontal=True, key="train_src")
