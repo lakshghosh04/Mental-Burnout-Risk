@@ -415,10 +415,21 @@ with explain_tab:
     else:
         pipe = model["pipeline"]
         clf_step = pipe.named_steps["clf"]
-        base = getattr(clf_step, "base_estimator", None) or getattr(clf_step, "estimator", None) or clf_step
-        cat_pipe = pipe.named_steps["prep"].named_transformers_["cat"]
-        ohe = cat_pipe.named_steps["ohe"]
-        cat_names = list(ohe.get_feature_names_out(model["cat_cols"]))
+        base = clf_step
+        if hasattr(clf_step, "base_estimator") and clf_step.base_estimator is not None:
+            base = clf_step.base_estimator
+        elif hasattr(clf_step, "estimator") and clf_step.estimator is not None:
+            base = clf_step.estimator
+        prep = pipe.named_steps["prep"]
+        cat_names = []
+        if hasattr(prep, "named_transformers_") and "cat" in prep.named_transformers_:
+            cat_pipe = prep.named_transformers_["cat"]
+            if hasattr(cat_pipe, "named_steps") and "ohe" in cat_pipe.named_steps:
+                try:
+                    ohe = cat_pipe.named_steps["ohe"]
+                    cat_names = list(ohe.get_feature_names_out(model["cat_cols"]))
+                except Exception:
+                    cat_names = []
         feature_names = model["num_cols"] + cat_names
         if hasattr(base, "coef_"):
             coefs = base.coef_.ravel()
