@@ -142,7 +142,7 @@ def proba_for_row(pipe, row):
 
 def ensure_reasonable_threshold():
     if st.session_state.threshold < 0.1:
-        st.warning("Threshold is very low. Using 0.10 to avoid misleading labels.")
+        st.warning("Threshold too low, resetting to 0.10")
         st.session_state.threshold = 0.1
 
 st.markdown(
@@ -223,6 +223,7 @@ with predict_tab:
                 mc5.metric("CV ROC-AUC", f"{model['cv']['test_roc_auc']:.3f}")
                 mc6.metric("CV F1", f"{model['cv']['test_f1']:.3f}")
                 st.caption(f"Target: {model.get('label_name','target')} • Trained: {model['trained_at']} • Rows: {model['rows']} • Calibration: {model['options'].get('calibration','None')} • Class weight: {model['options']['class_weight']}")
+
         st.markdown("#### Small changes that flip the decision")
         model = get_active_model()
         if model is not None:
@@ -242,330 +243,43 @@ with predict_tab:
                 want_pred = 0 if base_pred == 1 else 1
             else:
                 want_pred = 1 if base_pred == 0 else 0
-            best = None
-            steps = np.arange(0.0, 3.5, 0.5)
-            if base_pred == want_pred:
-                if label_name == "target":
-                    st.info("You already meet the goal at the current threshold.")
-                else:
-                    st.info("You already meet the goal at the current threshold.")
+            actionable = [c for c in ["sleep_hours","work_hours","hours_social"] if c in model["num_cols"]]
+            if len(actionable) == 0:
+                st.info("No adjustable features available for this model.")
             else:
+                steps = np.arange(0.0, 5.5, 0.5)
+                best_flip = None
+                best_improve = {"delta": 1.0, "sleep": 0.0, "work": 0.0, "social": 0.0, "new_p": base_p}
                 for ds in steps:
                     for dw in steps:
                         for dso in steps:
                             trial = current.copy()
-                            if "sleep_hours" in model["num_cols"]:
+                            if "sleep_hours" in actionable:
                                 trial.loc[0, "sleep_hours"] = np.clip(trial.loc[0, "sleep_hours"] + ds, 0, 24)
-                            if "work_hours" in model["num_cols"]:
+                            if "work_hours" in actionable:
                                 trial.loc[0, "work_hours"] = np.clip(trial.loc[0, "work_hours"] + dw, 0, 24)
-                            if "hours_social" in model["num_cols"]:
+                            if "hours_social" in actionable:
                                 trial.loc[0, "hours_social"] = np.clip(trial.loc[0, "hours_social"] - dso, 0, 24)
                             p = proba_for_row(pipe, trial)
                             pred = 1 if p >= st.session_state.threshold else 0
-                            ok = (pred == want_pred)
-                            if ok:
+                            if pred == want_pred:
                                 change = ds + dw + dso
-                                if best is None or change < best["change"]:
-                                    best = {
-                                        "sleep_delta": ds if "sleep_hours" in model["num_cols"] else 0.0,
-                                        "work_delta": dw if "work_hours" in model["num_cols"] else 0.0,
-                                        "social_delta": dso if "hours_social" in model["num_cols"] else 0.0,
-                                        "new_prob": p,
-                                        "change": change
-                                    }
-                if best is None:
-                    st.info("No small change within 3 hours found to flip the decision.")
+                                if best_flip is None or change < best_flip["change"]:
+                                    best_flip = {"sleep": ds, "work": dw, "social": dso, "new_p": p, "change": change}
+                            else:
+                                if label_name == "target":
+                                    delta = p - base_p
+                                else:
+                                    delta = (1 - p) - (1 - base_p)
+                                if delta < best_improve["delta"]:
+                                    best_improve = {"delta": delta, "sleep": ds, "work": dw, "social": dso, "new_p": p}
+                if best_flip is not None:
+                    if label_name == "target":
+                        st.success(f"Do this: sleep +{best_flip['sleep']:.1f} h, work +{best_flip['work']:.1f} h, social -{best_flip['social']:.1f} h. New burnout risk: {best_flip['new_p']*100:.1f}%.")
+                    else:
+                        st.success(f"Do this: sleep +{best_flip['sleep']:.1f} h, work +{best_flip['work']:.1f} h, social -{best_flip['social']:.1f} h. New good productivity: {best_flip['new_p']*100:.1f}%.")
                 else:
                     if label_name == "target":
-                        st.success(f"Do this: sleep +{best['sleep_delta']:.1f} h, work +{best['work_delta']:.1f} h, social -{best['social_delta']:.1f} h. New burnout risk: {best['new_prob']*100:.1f}%.")
+                        st.info(f"No small change flips decision. Closest: sleep +{best_improve['sleep']:.1f} h, work +{best_improve['work']:.1f} h, social -{best_improve['social']:.1f} h. Risk: {best_improve['new_p']*100:.1f}%.")
                     else:
-                        st.success(f"Do this: sleep +{best['sleep_delta']:.1f} h, work +{best['work_delta']:.1f} h, social -{best['social_delta']:.1f} h. New good productivity: {best['new_prob']*100:.1f}%.")
-                    cfx1, cfx2, cfx3, cfx4 = st.columns(4)
-                    cfx1.metric("Increase sleep by", f"{best['sleep_delta']:.1f} h")
-                    cfx2.metric("Increase work by", f"{best['work_delta']:.1f} h")
-                    cfx3.metric("Reduce social by", f"{best['social_delta']:.1f} h")
-                    if label_name == "target":
-                        cfx4.metric("New burnout risk", f"{best['new_prob']*100:.1f}%")
-                    else:
-                        cfx4.metric("New good productivity", f"{best['new_prob']*100:.1f}%")
-
-with train_tab:
-    src = st.radio("Training data", ["Default", "Upload"], horizontal=True, key="train_src")
-    file = None
-    if src == "Upload":
-        file = st.file_uploader("CSV for training", type=["csv"], key="train_csv")
-    df, dv = load_data(file)
-    if df is None:
-        st.info("Provide a CSV or keep Default once available.")
-    else:
-        df = normalize_schema(df)
-        target_choice = st.selectbox("Select target to predict", ["Burnout", "Productivity"], key="target_sel")
-        target_col = "target" if target_choice == "Burnout" else "productivity"
-        if target_choice == "Productivity" and "productivity" not in df.columns:
-            up_prod = st.file_uploader("Upload productivity CSV with columns: age, gender, hours_social, sleep_hours, work_hours, productivity", type=["csv"], key="prod_csv")
-            if up_prod is not None:
-                add = pd.read_csv(up_prod)
-                add = normalize_schema(add)
-                need = set(NUM_COLS_BASE + CAT_COLS_BASE + ["productivity"])
-                if need.issubset(set(add.columns)):
-                    df = pd.concat([df, add[NUM_COLS_BASE + CAT_COLS_BASE + ["productivity"]]], ignore_index=True)
-                    df = normalize_schema(df)
-                else:
-                    st.error(f"Uploaded file missing columns. Needed: {sorted(list(need))}")
-                    st.stop()
-        if target_col not in df.columns:
-            st.error(f"Column '{target_col}' not found. Available: {list(df.columns)}")
-            st.stop()
-        X, y, num_cols, cat_cols = clean_and_filter(df, target_col)
-        st.caption(f"Rows for {target_choice}: {len(X)} | Features used: {len(num_cols) + len(cat_cols)}")
-        with st.expander("EDA Snapshot"):
-            st.write("Class balance:", pd.Series(y).value_counts(normalize=True))
-            st.write("Missing values (subset):", df[df[target_col].notna()][num_cols + cat_cols].isna().sum())
-            if len(num_cols) > 0:
-                st.bar_chart(df[df[target_col].notna()][num_cols])
-        c0, c1, c2, c3 = st.columns(4)
-        with c0:
-            model_type = st.selectbox("Model", ["Logistic Regression", "Random Forest"], key="model_type")
-        with c1:
-            test_size = st.slider("Test split", 0.1, 0.4, 0.2, 0.05, key="test_split")
-        with c2:
-            random_state = st.number_input("Random state", 0, 9999, 42, key="rand_state")
-        with c3:
-            class_weight_flag = st.checkbox("Use class_weight='balanced'", value=False, key="cw_flag")
-        calibration_method = st.selectbox("Calibration", ["None", "Platt (sigmoid)", "Isotonic"], key="cal_method")
-        go = st.button("Train model", key="train_btn")
-        if go:
-            if len(np.unique(y)) < 2:
-                st.error("Target has a single class. Provide data with both classes.")
-            else:
-                st.session_state.threshold = 0.5
-                pipe = build_pipeline(num_cols, cat_cols, model_type, class_weight_flag, calibration_method)
-                scores = cv_scores(pipe, X, y)
-                Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=test_size, random_state=int(random_state), stratify=y)
-                pipe.fit(Xtr, ytr)
-                proba = pipe.predict_proba(Xte)[:, 1]
-                preds = (proba >= st.session_state.threshold).astype(int)
-                acc = accuracy_score(yte, preds)
-                roc = roc_auc_score(yte, proba)
-                f1 = f1_score(yte, preds)
-                fpr, tpr, _ = roc_curve(yte, proba)
-                p, r, _ = precision_recall_curve(yte, proba)
-                ap = average_precision_score(yte, proba)
-                cm = confusion_matrix(yte, preds)
-                frac_pos, mean_pred = calibration_curve(yte, proba, n_bins=10)
-                mid = f"M{len(st.session_state.models)+1}"
-                eval_df = Xte.copy()
-                eval_df["y_true"] = yte
-                eval_df["proba"] = proba
-                eval_df["pred"] = preds
-                model_record = {
-                    "id": mid,
-                    "name": f"Model {len(st.session_state.models)+1}",
-                    "pipeline": pipe,
-                    "trained_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "data_version": dv,
-                    "rows": int(len(X)),
-                    "features": list(X.columns),
-                    "num_cols": num_cols,
-                    "cat_cols": cat_cols,
-                    "label_name": target_col,
-                    "cv": scores,
-                    "eval_df": eval_df,
-                    "options": {"model_type": model_type, "calibration": calibration_method, "class_weight": ("balanced" if class_weight_flag else None)},
-                }
-                st.session_state.models.append(model_record)
-                set_active_model(mid)
-                st.session_state.data_version = dv
-                st.session_state.last_train = {
-                    "acc": float(acc), "roc": float(roc), "f1": float(f1),
-                    "fpr": fpr, "tpr": tpr, "precision": p, "recall": r, "ap": float(ap),
-                    "cm": cm, "mean_pred": mean_pred, "frac_pos": frac_pos
-                }
-                save_artifact(model_record)
-
-    res = st.session_state.last_train
-    if res is not None:
-        st.success(f"Held-out: acc {res['acc']:.3f} | roc_auc {res['roc']:.3f} | f1 {res['f1']:.3f}")
-        rc1, rc2 = st.columns(2)
-        with rc1:
-            fig1, ax1 = plt.subplots(figsize=(4,3))
-            ax1.plot(res['fpr'], res['tpr'])
-            ax1.plot([0,1],[0,1], linestyle='--')
-            ax1.set_xlabel('FPR')
-            ax1.set_ylabel('TPR')
-            ax1.set_title('ROC curve')
-            plt.tight_layout()
-            st.pyplot(fig1, use_container_width=False)
-        with rc2:
-            fig2, ax2 = plt.subplots(figsize=(4,3))
-            ax2.plot(res['recall'], res['precision'])
-            ax2.set_xlabel('Recall')
-            ax2.set_ylabel('Precision')
-            ax2.set_title(f"PR curve (AP={res['ap']:.3f})")
-            plt.tight_layout()
-            st.pyplot(fig2, use_container_width=False)
-        rc3, rc4 = st.columns(2)
-        with rc3:
-            fig3, ax3 = plt.subplots(figsize=(4,3))
-            ax3.imshow(res['cm'])
-            ax3.set_title('Confusion matrix')
-            ax3.set_xticks([0,1])
-            ax3.set_yticks([0,1])
-            ax3.set_xlabel('Predicted')
-            ax3.set_ylabel('True')
-            for (i, j), v in np.ndenumerate(res['cm']):
-                ax3.text(j, i, str(v), ha='center', va='center')
-            plt.tight_layout()
-            st.pyplot(fig3, use_container_width=False)
-        with rc4:
-            fig4, ax4 = plt.subplots(figsize=(4,3))
-            ax4.plot(res['mean_pred'], res['frac_pos'], marker='o')
-            ax4.plot([0,1],[0,1], linestyle='--')
-            ax4.set_xlabel('Mean predicted prob')
-            ax4.set_ylabel('Fraction positive')
-            ax4.set_title('Calibration curve')
-            plt.tight_layout()
-            st.pyplot(fig4, use_container_width=False)
-
-with explain_tab:
-    model = get_active_model()
-    if model is None:
-        st.info("Train or select a model first.")
-    else:
-        pipe = model["pipeline"]
-        clf_step = pipe.named_steps["clf"]
-        base = clf_step
-        if hasattr(clf_step, "base_estimator") and clf_step.base_estimator is not None:
-            base = clf_step.base_estimator
-        elif hasattr(clf_step, "estimator") and clf_step.estimator is not None:
-            base = clf_step.estimator
-        prep = pipe.named_steps["prep"]
-        cat_names = []
-        if hasattr(prep, "named_transformers_") and "cat" in prep.named_transformers_:
-            cat_pipe = prep.named_transformers_["cat"]
-            if hasattr(cat_pipe, "named_steps") and "ohe" in cat_pipe.named_steps:
-                try:
-                    ohe = cat_pipe.named_steps["ohe"]
-                    cat_names = list(ohe.get_feature_names_out(model["cat_cols"]))
-                except Exception:
-                    cat_names = []
-        feature_names = model["num_cols"] + cat_names
-        if hasattr(base, "coef_"):
-            coefs = base.coef_.ravel()
-            w = pd.DataFrame({"feature": feature_names, "weight": coefs}).sort_values("weight", ascending=False)
-            st.dataframe(w, use_container_width=True)
-        elif hasattr(base, "feature_importances_"):
-            imps = base.feature_importances_
-            w = pd.DataFrame({"feature": feature_names, "importance": imps}).sort_values("importance", ascending=False)
-            st.dataframe(w, use_container_width=True)
-        else:
-            st.info("No explainability attributes available for this model.")
-
-with fairness_tab:
-    model = get_active_model()
-    if model is None or "eval_df" not in model:
-        st.info("Train a model to view fairness metrics.")
-    else:
-        df_eval = model["eval_df"].copy()
-        thr = st.session_state.threshold
-        df_eval["group_gender"] = df_eval["gender"].astype(str).str.lower().where(df_eval["gender"].isin(["male","female"]), "other")
-        bins = [0, 19, 29, 39, 49, 200]
-        labels = ["<20", "20s", "30s", "40s", "50+"]
-        df_eval["group_age"] = pd.cut(pd.to_numeric(df_eval["age"], errors="coerce").fillna(0), bins=bins, labels=labels, right=True, include_lowest=True)
-        def group_table(col):
-            rows = []
-            for g, d in df_eval.groupby(col):
-                if len(d) == 0 or d["y_true"].nunique() < 2:
-                    continue
-                y, p = d["y_true"].values, d["proba"].values
-                pred = (p >= thr).astype(int)
-                tpr = ((pred==1) & (y==1)).sum() / max((y==1).sum(), 1)
-                fpr = ((pred==1) & (y==0)).sum() / max((y==0).sum(), 1)
-                auc = roc_auc_score(y, p)
-                acc = accuracy_score(y, pred)
-                rows.append({"group": str(g), "n": len(d), "auc": round(auc,3), "tpr": round(tpr,3), "fpr": round(fpr,3), "acc": round(acc,3)})
-            return pd.DataFrame(rows).sort_values("group")
-        st.markdown("#### By gender")
-        gtab = group_table("group_gender")
-        if len(gtab) == 0:
-            st.info("Not enough variation to compute gender groups.")
-        else:
-            st.dataframe(gtab, use_container_width=True)
-            st.caption(f"AUC gap: {gtab['auc'].max() - gtab['auc'].min():.3f} | TPR gap: {gtab['tpr'].max() - gtab['tpr'].min():.3f}")
-        st.markdown("#### By age band")
-        atab = group_table("group_age")
-        if len(atab) == 0:
-            st.info("Not enough variation to compute age groups.")
-        else:
-            st.dataframe(atab, use_container_width=True)
-            st.caption(f"AUC gap: {atab['auc'].max() - atab['auc'].min():.3f} | TPR gap: {atab['tpr'].max() - atab['tpr'].min():.3f}")
-
-with models_tab:
-    if len(st.session_state.models) == 0:
-        st.info("No models yet.")
-    else:
-        names = [f"{m['id']} | {m['name']} | {m['data_version']} | label={m.get('label_name','target')}" for m in st.session_state.models]
-        idx = 0
-        if st.session_state.active_model_id is not None:
-            for i, m in enumerate(st.session_state.models):
-                if m["id"] == st.session_state.active_model_id:
-                    idx = i
-                    break
-        choice = st.radio("Select active model", names, index=idx)
-        picked = st.session_state.models[names.index(choice)]
-        set_active_model(picked["id"])
-        st.session_state.data_version = picked["data_version"]
-        st.session_state.threshold = 0.5
-        bio = io.BytesIO()
-        joblib.dump(picked, bio)
-        bio.seek(0)
-        st.download_button("Download model", data=bio, file_name=f"{picked['id']}.joblib")
-        with st.expander("Active model card"):
-            meta = {
-                "trained": picked["trained_at"],
-                "Data version": picked["data_version"],
-                "rows": picked["rows"],
-                "features": picked["features"],
-                "cv_accuracy": round(picked["cv"]["test_accuracy"],3),
-                "cv_roc_auc": round(picked["cv"]["test_roc_auc"],3),
-                "cv_f1": round(picked["cv"]["test_f1"],3),
-                "threshold": round(st.session_state.threshold,2),
-                "target": picked.get("label_name","target"),
-                "options": picked["options"],
-                "fairness_note": "Check Fairness tab for group metrics."
-            }
-            st.json(meta)
-
-with about_tab:
-    st.markdown("### About")
-    st.markdown("This app predicts burnout risk or productivity using age, gender, social media hours, sleep hours, and work or study hours.")
-    st.markdown("Data sources: Sleep Health and Lifestyle, Social Media and Mental Health, Students Social Media Addiction.")
-    st.markdown("This is for learning and screening, not diagnosis.")
-
-with batch_tab:
-    st.markdown("### Batch Scoring")
-    model = get_active_model()
-    if model is None:
-        st.info("Train or select a model first.")
-    else:
-        up = st.file_uploader("Upload CSV with columns: age, gender, hours_social, sleep_hours, work_hours", type=["csv"], key="batch_csv")
-        if up is not None:
-            df_in = pd.read_csv(up)
-            req = model["num_cols"] + model["cat_cols"]
-            missing = [c for c in req if c not in df_in.columns]
-            if missing:
-                st.error(f"Missing columns: {missing}")
-            else:
-                try:
-                    pipe = model["pipeline"]
-                    probs = pipe.predict_proba(df_in[req])[:,1]
-                    preds = (probs >= st.session_state.threshold).astype(int)
-                    df_out = df_in.copy()
-                    label_name = model.get("label_name","target")
-                    df_out[f"{label_name}_prob"] = probs
-                    df_out[f"{label_name}_pred"] = preds
-                    st.write("Scored sample:", df_out.head())
-                    csv = df_out.to_csv(index=False).encode()
-                    st.download_button("Download results", data=csv, file_name="batch_predictions.csv", mime="text/csv")
-                except Exception as e:
-                    st.error(f"Error scoring batch: {e}")
+                        st.info(f"No small change flips decision. Closest: sleep +{best_improve['sleep']:.1f} h, work +{best_improve['work']:.1f} h, social -{best_improve['social']:.1f} h. Good productivity: {best_improve['new_p']*100:.1f}%.")
