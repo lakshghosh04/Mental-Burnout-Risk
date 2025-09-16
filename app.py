@@ -16,6 +16,7 @@ from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, roc_auc_score, f1_score, precision_recall_curve, roc_curve, average_precision_score, confusion_matrix
 import joblib
+import sklearn
 
 st.set_page_config(layout="wide", page_title="Burnout Risk")
 
@@ -75,11 +76,15 @@ def normalize_schema(df):
 
 def clean_and_filter(df, target_col):
     use = df[df[target_col].notna()].copy()
-    use["gender"] = use["gender"].astype(str)
+    use["gender"] = use["gender"].astype(str).str.strip().str.lower()
     for c in ["age", "hours_social", "sleep_hours", "work_hours"]:
         if c in use.columns:
             use[c] = pd.to_numeric(use[c], errors="coerce")
-            use[c] = use[c].clip(0, 100 if c == "age" else 24)
+    if "age" in use.columns:
+        use["age"] = use["age"].clip(0, 120)
+    for c in ["hours_social", "sleep_hours", "work_hours"]:
+        if c in use.columns:
+            use[c] = use[c].clip(0, 24)
     num_cols = [c for c in NUM_COLS_BASE if c in use.columns and not use[c].isna().all()]
     cat_cols = [c for c in CAT_COLS_BASE if c in use.columns]
     X = use[num_cols + cat_cols]
@@ -92,7 +97,7 @@ def build_pipeline(num_cols, cat_cols, model_type, class_weight, calibration_met
         ("cat", Pipeline([("imp", SimpleImputer(strategy="most_frequent")), ("ohe", OneHotEncoder(handle_unknown="ignore"))]), cat_cols),
     ])
     if model_type == "Random Forest":
-        base = RandomForestClassifier(n_estimators=300, random_state=42, class_weight=("balanced" if class_weight else None))
+        base = RandomForestClassifier(n_estimators=300, random_state=42, n_jobs=-1, class_weight=("balanced" if class_weight else None))
     else:
         base = LogisticRegression(max_iter=500, class_weight=("balanced" if class_weight else None))
     if calibration_method == "Platt (sigmoid)":
@@ -106,7 +111,7 @@ def build_pipeline(num_cols, cat_cols, model_type, class_weight, calibration_met
 def cv_scores(pipe, X, y):
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     scoring = {"accuracy": "accuracy", "roc_auc": "roc_auc", "f1": "f1"}
-    out = cross_validate(pipe, X, y, cv=cv, scoring=scoring, n_jobs=None)
+    out = cross_validate(pipe, X, y, cv=cv, scoring=scoring, n_jobs=-1)
     return {k: float(np.mean(v)) for k, v in out.items() if k.startswith("test_")}
 
 def get_active_model():
@@ -202,7 +207,6 @@ with predict_tab:
                 b2.metric("CV ROC-AUC", f"{model['cv']['test_roc_auc']:.3f}")
                 b3.metric("CV F1", f"{model['cv']['test_f1']:.3f}")
                 st.caption(f"Target: {model.get('label_name','target')} • Trained: {model['trained_at']} • Rows: {model['rows']} • Calibration: {model['options'].get('calibration','None')} • Class weight: {model['options']['class_weight']}")
-
         st.markdown("#### Small changes that flip the decision")
         model = get_active_model()
         if model is not None:
@@ -226,54 +230,64 @@ with predict_tab:
                 if len(actionable) == 0:
                     st.info("No adjustable features available for this model.")
                 else:
-                    steps = np.arange(0.5, 5.5, 0.5)
+                    steps = np.arange(-5.0, 5.5, 0.5)
                     best_flip = None
                     best_improve = None
+                    def within_day(row):
+                        tot = 0
+                        for k in ["sleep_hours", "work_hours", "hours_social"]:
+                            if k in row.columns:
+                                tot += float(row.loc[0, k])
+                        return 0 <= tot <= 24
                     for ds in steps:
                         for dw in steps:
                             for dso in steps:
+                                if ds == dw == dso == 0:
+                                    continue
                                 trial = current.copy()
                                 if "sleep_hours" in actionable:
                                     trial.loc[0, "sleep_hours"] = np.clip(trial.loc[0, "sleep_hours"] + ds, 0, 24)
                                 if "work_hours" in actionable:
                                     trial.loc[0, "work_hours"] = np.clip(trial.loc[0, "work_hours"] + dw, 0, 24)
                                 if "hours_social" in actionable:
-                                    trial.loc[0, "hours_social"] = np.clip(trial.loc[0, "hours_social"] - dso, 0, 24)
+                                    trial.loc[0, "hours_social"] = np.clip(trial.loc[0, "hours_social"] + dso, 0, 24)
+                                if not within_day(trial):
+                                    continue
                                 p = proba_for_row(pipe, trial)
                                 pred = 1 if p >= st.session_state.threshold else 0
-                                total_change = ds + dw + dso
+                                change = abs(ds) + abs(dw) + abs(dso)
                                 if pred == desired_pred:
-                                    if best_flip is None or total_change < best_flip["change"]:
-                                        best_flip = {"sleep": ds, "work": dw, "social": dso, "new_p": p, "change": total_change}
+                                    if best_flip is None or change < best_flip["change"]:
+                                        best_flip = {"sleep": ds, "work": dw, "social": dso, "new_p": p, "change": change}
                                 else:
                                     improve = (base_p - p) if label_name == "target" else (p - base_p)
-                                    if best_improve is None or improve > best_improve["improve"] or (np.isclose(improve, best_improve["improve"]) and total_change < best_improve["change"]):
-                                        best_improve = {"sleep": ds, "work": dw, "social": dso, "new_p": p, "improve": improve, "change": total_change}
+                                    if best_improve is None or improve > best_improve["improve"] or (np.isclose(improve, best_improve["improve"]) and change < best_improve["change"]):
+                                        best_improve = {"sleep": ds, "work": dw, "social": dso, "new_p": p, "improve": improve, "change": change}
                     if best_flip is not None:
                         if label_name == "target":
-                            st.success(f"Do this: sleep +{best_flip['sleep']:.1f} h, work +{best_flip['work']:.1f} h, social -{best_flip['social']:.1f} h. New burnout risk: {best_flip['new_p']*100:.1f}%.")
+                            st.success(f"Do this: sleep {best_flip['sleep']:+.1f} h, work {best_flip['work']:+.1f} h, social {best_flip['social']:+.1f} h. New burnout risk: {best_flip['new_p']*100:.1f}%.")
                         else:
-                            st.success(f"Do this: sleep +{best_flip['sleep']:.1f} h, work +{best_flip['work']:.1f} h, social -{best_flip['social']:.1f} h. New good productivity: {best_flip['new_p']*100:.1f}%.")
+                            st.success(f"Do this: sleep {best_flip['sleep']:+.1f} h, work {best_flip['work']:+.1f} h, social {best_flip['social']:+.1f} h. New good productivity: {best_flip['new_p']*100:.1f}%.")
                         c1x, c2x, c3x, c4x = st.columns(4)
-                        c1x.metric("Increase sleep by", f"{best_flip['sleep']:.1f} h")
-                        c2x.metric("Increase work by", f"{best_flip['work']:.1f} h")
-                        c3x.metric("Reduce social by", f"{best_flip['social']:.1f} h")
+                        c1x.metric("Sleep change", f"{best_flip['sleep']:+.1f} h")
+                        c2x.metric("Work change", f"{best_flip['work']:+.1f} h")
+                        c3x.metric("Social change", f"{best_flip['social']:+.1f} h")
                         if label_name == "target":
                             c4x.metric("New burnout risk", f"{best_flip['new_p']*100:.1f}%")
                         else:
                             c4x.metric("New good productivity", f"{best_flip['new_p']*100:.1f}%")
                     else:
                         if best_improve is None or best_improve["improve"] <= 0:
-                            st.info("No small change up to 5 hours improved the outcome.")
+                            st.info("No small change up to ±5 hours improved the outcome.")
                         else:
                             if label_name == "target":
-                                st.info(f"No small change found to flip. Closest change: sleep +{best_improve['sleep']:.1f} h, work +{best_improve['work']:.1f} h, social -{best_improve['social']:.1f} h. New burnout risk: {best_improve['new_p']*100:.1f}%.")
+                                st.info(f"No small change found to flip. Closest change: sleep {best_improve['sleep']:+.1f} h, work {best_improve['work']:+.1f} h, social {best_improve['social']:+.1f} h. New burnout risk: {best_improve['new_p']*100:.1f}%.")
                             else:
-                                st.info(f"No small change found to flip. Closest change: sleep +{best_improve['sleep']:.1f} h, work +{best_improve['work']:.1f} h, social -{best_improve['social']:.1f} h. New good productivity: {best_improve['new_p']*100:.1f}%.")
+                                st.info(f"No small change found to flip. Closest change: sleep {best_improve['sleep']:+.1f} h, work {best_improve['work']:+.1f} h, social {best_improve['social']:+.1f} h. New good productivity: {best_improve['new_p']*100:.1f}%")
                             d1, d2, d3, d4 = st.columns(4)
-                            d1.metric("Increase sleep by", f"{best_improve['sleep']:.1f} h")
-                            d2.metric("Increase work by", f"{best_improve['work']:.1f} h")
-                            d3.metric("Reduce social by", f"{best_improve['social']:.1f} h")
+                            d1.metric("Sleep change", f"{best_improve['sleep']:+.1f} h")
+                            d2.metric("Work change", f"{best_improve['work']:+.1f} h")
+                            d3.metric("Social change", f"{best_improve['social']:+.1f} h")
                             if label_name == "target":
                                 d4.metric("New burnout risk", f"{best_improve['new_p']*100:.1f}%")
                             else:
@@ -310,7 +324,11 @@ with train_tab:
             st.write("Class balance:", pd.Series(y).value_counts(normalize=True))
             st.write("Missing values (subset):", df[df[target_col].notna()][num_cols + cat_cols].isna().sum())
             if len(num_cols) > 0:
-                st.bar_chart(df[df[target_col].notna()][num_cols])
+                for c in num_cols:
+                    fig, ax = plt.subplots(figsize=(4, 3))
+                    ax.hist(pd.to_numeric(df[df[target_col].notna()][c], errors="coerce").dropna(), bins=20)
+                    ax.set_title(f"{c} distribution")
+                    st.pyplot(fig, use_container_width=False)
         c0, c1, c2, c3 = st.columns(4)
         with c0:
             model_type = st.selectbox("Model", ["Logistic Regression", "Random Forest"], key="model_type")
@@ -360,6 +378,7 @@ with train_tab:
                     "cv": scores,
                     "eval_df": eval_df,
                     "options": {"model_type": model_type, "calibration": calibration_method, "class_weight": ("balanced" if class_weight_flag else None)},
+                    "env": {"sklearn": sklearn.__version__, "pandas": pd.__version__, "numpy": np.__version__, "streamlit": st.__version__},
                 }
                 st.session_state.models.append(model_record)
                 set_active_model(mid)
@@ -414,6 +433,25 @@ with train_tab:
             ax4.set_title("Calibration curve")
             plt.tight_layout()
             st.pyplot(fig4, use_container_width=False)
+        with st.expander("Threshold helpers"):
+            act = get_active_model()
+            if act is not None and "eval_df" in act:
+                yh = act["eval_df"]["y_true"].values
+                ph = act["eval_df"]["proba"].values
+                if st.button("Set threshold by Youden’s J (ROC)"):
+                    fprh, tprh, thrh = roc_curve(yh, ph)
+                    j = tprh - fprh
+                    st.session_state.threshold = float(np.clip(thrh[np.argmax(j)], 0.05, 0.95))
+                    st.success(f"Threshold set to {st.session_state.threshold:.2f}")
+                if st.button("Set threshold by max F1"):
+                    prec, rec, thr = precision_recall_curve(yh, ph)
+                    f1s = 2*prec*rec/(prec+rec+1e-9)
+                    best = int(np.argmax(f1s[:-1])) if len(f1s) > 1 else 0
+                    if len(thr) > 0:
+                        st.session_state.threshold = float(np.clip(thr[best], 0.05, 0.95))
+                        st.success(f"Threshold set to {st.session_state.threshold:.2f}")
+                    else:
+                        st.info("Not enough positive predictions to set by F1.")
 
 with explain_tab:
     model = get_active_model()
@@ -456,13 +494,14 @@ with fairness_tab:
     else:
         df_eval = model["eval_df"].copy()
         thr = st.session_state.threshold
-        df_eval["group_gender"] = df_eval["gender"].astype(str).str.lower().where(df_eval["gender"].isin(["male", "female"]), "other")
+        g = df_eval["gender"].astype(str).str.lower()
+        df_eval["group_gender"] = g.where(g.isin(["male", "female"]), "other")
         bins = [0, 19, 29, 39, 49, 200]
         labels = ["<20", "20s", "30s", "40s", "50+"]
         df_eval["group_age"] = pd.cut(pd.to_numeric(df_eval["age"], errors="coerce").fillna(0), bins=bins, labels=labels, include_lowest=True)
         def group_table(col):
             rows = []
-            for g, d in df_eval.groupby(col):
+            for gname, d in df_eval.groupby(col):
                 if len(d) == 0 or d["y_true"].nunique() < 2:
                     continue
                 y, p = d["y_true"].values, d["proba"].values
@@ -471,7 +510,7 @@ with fairness_tab:
                 fpr = ((pred == 1) & (y == 0)).sum() / max((y == 0).sum(), 1)
                 auc = roc_auc_score(y, p)
                 acc = accuracy_score(y, pred)
-                rows.append({"group": str(g), "n": len(d), "auc": round(auc, 3), "tpr": round(tpr, 3), "fpr": round(fpr, 3), "acc": round(acc, 3)})
+                rows.append({"group": str(gname), "n": len(d), "auc": round(auc, 3), "tpr": round(tpr, 3), "fpr": round(fpr, 3), "acc": round(acc, 3)})
             return pd.DataFrame(rows).sort_values("group")
         st.markdown("#### By gender")
         gtab = group_table("group_gender")
@@ -503,7 +542,7 @@ with models_tab:
         picked = st.session_state.models[names.index(choice)]
         set_active_model(picked["id"])
         st.session_state.data_version = picked["data_version"]
-        st.session_state.threshold = 0.5
+        st.session_state.threshold = st.session_state.get("threshold", 0.5)
         bio = io.BytesIO()
         joblib.dump(picked, bio)
         bio.seek(0)
@@ -520,6 +559,7 @@ with models_tab:
                 "threshold": round(st.session_state.threshold, 2),
                 "target": picked.get("label_name", "target"),
                 "options": picked["options"],
+                "env": picked.get("env", {}),
                 "fairness_note": "Check Fairness tab for group metrics."
             }
             st.json(meta)
