@@ -181,52 +181,40 @@ with predict_tab:
                 "work_hours": work_h if "work_hours" in model["num_cols"] else 0
             }])
             base_p = proba_for_row(pipe, current)
-            base_pred = 1 if base_p >= st.session_state.threshold else 0
-            desired_pred = 0 if label_name=="target" else 1
-            if base_pred == desired_pred:
-                st.info("You already meet the goal at the current threshold.")
+            base_pred = int(base_p >= st.session_state.threshold)
+            desired_pred = 1 - base_pred
+            actionable = [c for c in ["sleep_hours","work_hours","hours_social"] if c in model["num_cols"]]
+            if len(actionable)==0:
+                st.info("No adjustable features available for this model.")
             else:
-                actionable = [c for c in ["sleep_hours","work_hours","hours_social"] if c in model["num_cols"]]
-                if len(actionable)==0:
-                    st.info("No adjustable features available for this model.")
+                steps = np.arange(-3.0, 3.5, 0.5)
+                best_flip, best_improve = None, None
+                def day_ok(row):
+                    tot = sum(float(row.loc[0,k]) for k in ["sleep_hours","work_hours","hours_social"] if k in row.columns)
+                    return 0 <= tot <= 24
+                for col in actionable:
+                    base_val = float(current.loc[0,col])
+                    for d in steps:
+                        if d==0: continue
+                        trial = current.copy()
+                        trial.loc[0,col] = np.clip(base_val + d, 0, 24)
+                        if not day_ok(trial): continue
+                        p = proba_for_row(pipe, trial)
+                        pred = int(p >= st.session_state.threshold)
+                        change = abs(d)
+                        if pred == desired_pred:
+                            if best_flip is None or change < best_flip["change"]:
+                                best_flip = {"col":col,"d":d,"p":p,"change":change}
+                        else:
+                            improve = (base_p - p) if label_name=="target" else (p - base_p)
+                            if best_improve is None or improve > best_improve["improve"] or (np.isclose(improve,best_improve["improve"]) and change < best_improve["change"]):
+                                best_improve = {"col":col,"d":d,"p":p,"improve":improve,"change":change}
+                if best_flip:
+                    st.success(f"Change {best_flip['col'].replace('_',' ')} by {best_flip['d']:+.1f} h. New probability: {best_flip['p']*100:.1f}% (decision flips).")
+                elif best_improve and best_improve["improve"]>0:
+                    st.info(f"Closest improvement: change {best_improve['col'].replace('_',' ')} by {best_improve['d']:+.1f} h. New probability: {best_improve['p']*100:.1f}%.")
                 else:
-                    steps = np.arange(-5.0, 5.5, 0.5)
-                    best_flip, best_improve = None, None
-                    def within_day(row):
-                        tot = sum(float(row.loc[0,k]) for k in ["sleep_hours","work_hours","hours_social"] if k in row.columns)
-                        return 0 <= tot <= 24
-                    for ds in steps:
-                        for dw in steps:
-                            for dso in steps:
-                                if ds==dw==dso==0: continue
-                                trial = current.copy()
-                                if "sleep_hours" in actionable: trial.loc[0,"sleep_hours"] = np.clip(trial.loc[0,"sleep_hours"] + ds, 0, 24)
-                                if "work_hours" in actionable: trial.loc[0,"work_hours"] = np.clip(trial.loc[0,"work_hours"] + dw, 0, 24)
-                                if "hours_social" in actionable: trial.loc[0,"hours_social"] = np.clip(trial.loc[0,"hours_social"] + dso, 0, 24)
-                                if not within_day(trial): continue
-                                p = proba_for_row(pipe, trial)
-                                pred = 1 if p >= st.session_state.threshold else 0
-                                change = abs(ds)+abs(dw)+abs(dso)
-                                if pred==desired_pred:
-                                    if best_flip is None or change < best_flip["change"]:
-                                        best_flip = {"sleep":ds,"work":dw,"social":dso,"new_p":p,"change":change}
-                                else:
-                                    improve = (base_p - p) if label_name=="target" else (p - base_p)
-                                    if best_improve is None or improve > best_improve["improve"] or (np.isclose(improve, best_improve["improve"]) and change < best_improve["change"]):
-                                        best_improve = {"sleep":ds,"work":dw,"social":dso,"new_p":p,"improve":improve,"change":change}
-                    if best_flip is not None:
-                        if label_name=="target":
-                            st.success(f"Do this: sleep {best_flip['sleep']:+.1f} h, work {best_flip['work']:+.1f} h, social {best_flip['social']:+.1f} h. New burnout risk: {best_flip['new_p']*100:.1f}%.")
-                        else:
-                            st.success(f"Do this: sleep {best_flip['sleep']:+.1f} h, work {best_flip['work']:+.1f} h, social {best_flip['social']:+.1f} h. New good productivity: {best_flip['new_p']*100:.1f}%.")
-                    else:
-                        if best_improve is None or best_improve["improve"] <= 0:
-                            st.info("No small change up to ±5 hours improved the outcome.")
-                        else:
-                            if label_name=="target":
-                                st.info(f"No small change found to flip. Closest change: sleep {best_improve['sleep']:+.1f} h, work {best_improve['work']:+.1f} h, social {best_improve['social']:+.1f} h. New burnout risk: {best_improve['new_p']*100:.1f}%.")
-                            else:
-                                st.info(f"No small change found to flip. Closest change: sleep {best_improve['sleep']:+.1f} h, work {best_improve['work']:+.1f} h, social {best_improve['social']:+.1f} h. New good productivity: {best_improve['new_p']*100:.1f}%")
+                    st.info("No helpful change found within ±3 hours.")
 
 with train_tab:
     src = st.radio("Training data", ["Default","Upload"], horizontal=True, key="train_src")
